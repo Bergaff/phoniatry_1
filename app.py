@@ -556,48 +556,55 @@ def main():
 
                 html_path_histogram = os.path.join(OUTPUT_DIR, f"{base_name}_vowel_histogram.html")
                 hist_fig.write_html(html_path_histogram)
-                # === НОВЫЙ ГРАФИК 3: РАДИАЛЬНАЯ ЗВЕЗДА ===
-                # === НОВЫЙ ГРАФИК 3: РАДИАЛЬНАЯ ЗВЕЗДА С УПРАВЛЕНИЕМ ===
+                # === РАДИАЛЬНАЯ ЗВЕЗДА С БЫСТРЫМ УПРАВЛЕНИЕМ ===
                 st.subheader("Радиальная «Звезда гласных» с нормами")
                 gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="radar_gender")
-                fig_radar = plot_radar_vowel_star(vowel_data, audio_path, gender=gender)
-                if fig_radar:
-                    # --- Добавляем кнопки управления видимостью ---
+
+                # Кэшируем график
+                if 'radar_fig' not in st.session_state:
+                    st.session_state.radar_fig = plot_radar_vowel_star(vowel_data, audio_path, gender=gender)
+
+                fig_radar = st.session_state.radar_fig
+                if not fig_radar or len(fig_radar.data) == 0:
+                    st.warning("Нет данных для звезды.")
+                else:
                     col1, col2 = st.columns(2)
                     with col1:
-                        if st.button("Показать всё", key="radar_show_all"):
-                            for trace in fig_radar.data:
-                                trace.visible = True
-                            st.rerun()
+                        if st.button("Показать всё", key="show_all_radar"):
+                            fig_radar.update_traces(visible=True)
                     with col2:
-                        if st.button("Скрыть всё", key="radar_hide_all"):
-                            for trace in fig_radar.data:
-                                trace.visible = 'legendonly'
-                            st.rerun()
+                        if st.button("Скрыть всё", key="hide_all_radar"):
+                            fig_radar.update_traces(visible='legendonly')
 
-                    # --- Отображаем график ---
                     st.plotly_chart(fig_radar, use_container_width=True, config={'displayModeBar': True})
 
-                    # --- Скачивание ---
                     radar_csv = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
                     st.download_button("Скачать данные (звезда)", radar_csv, f"{base_name}_radar_data.csv", "text/csv")
                     radar_html = os.path.join(OUTPUT_DIR, f"{base_name}_radar_star.html")
                     fig_radar.write_html(radar_html)
 
                 # === НОВЫЙ ГРАФИК 4: K-MEANS КЛАСТЕРИЗАЦИЯ ===
+                               # === K-MEANS С БЫСТРЫМ УПРАВЛЕНИЕМ ===
                 st.subheader("F1–F2 карта с автоматической кластеризацией (k-means)")
-                fig_kmeans = plot_kmeans_formant_map(vowel_data, audio_path, n_clusters=6)
-                if fig_kmeans:
-                    st.plotly_chart(fig_kmeans, use_container_width=True)
-                    kmeans_csv = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
-                    st.download_button("Скачать данные (k-means)", kmeans_csv, f"{base_name}_kmeans_data.csv", "text/csv")
-                    kmeans_html = os.path.join(OUTPUT_DIR, f"{base_name}_kmeans_map.html")
-                    fig_kmeans.write_html(kmeans_html)
-                # === НОВЫЙ ГРАФИК 4: K-MEANS КЛАСТЕРИЗАЦИЯ ===
-                st.subheader("F1–F2 карта с автоматической кластеризацией (k-means)")
-                fig_kmeans = plot_kmeans_formant_map(vowel_data, audio_path, n_clusters=6)
-                if fig_kmeans:
-                    st.plotly_chart(fig_kmeans, use_container_width=True)
+
+                if 'kmeans_fig' not in st.session_state:
+                    st.session_state.kmeans_fig = plot_kmeans_formant_map(vowel_data, audio_path, n_clusters=6)
+
+                fig_kmeans = st.session_state.kmeans_fig
+                if not fig_kmeans or len(fig_kmeans.data) == 0:
+                    st.warning("Нет данных для кластеризации.")
+                else:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("Показать всё", key="show_all_kmeans"):
+                            fig_kmeans.update_traces(visible=True)
+                    with col2:
+                        if st.button("Скрыть всё", key="hide_all_kmeans"):
+                            fig_kmeans.update_traces(visible='legendonly')
+
+                    if len(fig_kmeans.data) > 0:
+                        st.plotly_chart(fig_kmeans, use_container_width=True, config={'displayModeBar': True})
+
                     kmeans_csv = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
                     st.download_button("Скачать данные (k-means)", kmeans_csv, f"{base_name}_kmeans_data.csv", "text/csv")
                     kmeans_html = os.path.join(OUTPUT_DIR, f"{base_name}_kmeans_map.html")
