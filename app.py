@@ -420,7 +420,7 @@ def plot_radar_vowel_star(vowel_data, audio_filename, gender='female'):
     return fig
 
 def plot_kmeans_formant_map(vowel_data, audio_filename, n_clusters=6):
-    """F1–F2 карта с k-means кластеризацией"""
+    """F1–F2 карта с k-means + эллипсы"""
     df = pd.DataFrame(vowel_data)
     if len(df) < n_clusters:
         st.warning("Слишком мало данных для кластеризации.")
@@ -439,14 +439,40 @@ def plot_kmeans_formant_map(vowel_data, audio_filename, n_clusters=6):
     for cluster in range(n_clusters):
         cluster_df = df_norm[df_norm['cluster'] == cluster]
         if len(cluster_df) == 0: continue
+
+        # Точки
         fig.add_trace(go.Scatter(
             x=cluster_df['F1'],
             y=cluster_df['F2'],
             mode='markers',
-            name=f'Кластер {cluster+1}',
-            marker=dict(color=colors[cluster % len(colors)], size=8),
-            text=cluster_df['vowel']
+            name=f'Кластер {cluster+1} ({cluster_df["vowel"].iloc[0]})',
+            marker=dict(color=colors[cluster % len(colors)], size=10),
+            text=cluster_df['vowel'],
+            hovertemplate='<b>%{text}</b><br>F1: %{x:.0f} Гц<br>F2: %{y:.0f} Гц'
         ))
+
+        # Эллипс (95% доверие)
+        if len(cluster_df) > 3:
+            mean_x = cluster_df['F1'].mean()
+            mean_y = cluster_df['F2'].mean()
+            cov = np.cov(cluster_df['F1'], cluster_df['F2'])
+            try:
+                from scipy.stats import chi2
+                lambda_, v = np.linalg.eig(cov)
+                lambda_ = np.sqrt(lambda_)
+                angle = np.degrees(np.arctan2(v[1,0], v[0,0]))
+                width, height = 2 * 1.96 * lambda_  # 95%
+                ell = go.Scatter(
+                    x=[mean_x + width * np.cos(np.linspace(0, 2*np.pi, 100)) * np.cos(angle) - height * np.sin(np.linspace(0, 2*np.pi, 100)) * np.sin(angle)],
+                    y=[mean_y + width * np.cos(np.linspace(0, 2*np.pi, 100)) * np.sin(angle) + height * np.sin(np.linspace(0, 2*np.pi, 100)) * np.cos(angle)],
+                    mode='lines',
+                    line=dict(color=colors[cluster % len(colors)], width=2, dash='dash'),
+                    name=f'95% эллипс {cluster+1}',
+                    showlegend=False
+                )
+                fig.add_trace(ell)
+            except:
+                pass
 
     fig.update_layout(
         title=f'F1–F2 карта с кластеризацией (k={n_clusters}) — {os.path.basename(audio_filename)}',
@@ -531,11 +557,28 @@ def main():
                 html_path_histogram = os.path.join(OUTPUT_DIR, f"{base_name}_vowel_histogram.html")
                 hist_fig.write_html(html_path_histogram)
                 # === НОВЫЙ ГРАФИК 3: РАДИАЛЬНАЯ ЗВЕЗДА ===
+                # === НОВЫЙ ГРАФИК 3: РАДИАЛЬНАЯ ЗВЕЗДА С УПРАВЛЕНИЕМ ===
                 st.subheader("Радиальная «Звезда гласных» с нормами")
                 gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="radar_gender")
                 fig_radar = plot_radar_vowel_star(vowel_data, audio_path, gender=gender)
                 if fig_radar:
-                    st.plotly_chart(fig_radar, use_container_width=True)
+                    # --- Добавляем кнопки управления видимостью ---
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("Показать всё", key="radar_show_all"):
+                            for trace in fig_radar.data:
+                                trace.visible = True
+                            st.rerun()
+                    with col2:
+                        if st.button("Скрыть всё", key="radar_hide_all"):
+                            for trace in fig_radar.data:
+                                trace.visible = 'legendonly'
+                            st.rerun()
+
+                    # --- Отображаем график ---
+                    st.plotly_chart(fig_radar, use_container_width=True, config={'displayModeBar': True})
+
+                    # --- Скачивание ---
                     radar_csv = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
                     st.download_button("Скачать данные (звезда)", radar_csv, f"{base_name}_radar_data.csv", "text/csv")
                     radar_html = os.path.join(OUTPUT_DIR, f"{base_name}_radar_star.html")
