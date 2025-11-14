@@ -530,7 +530,8 @@ def main():
 
                 html_path_histogram = os.path.join(OUTPUT_DIR, f"{base_name}_vowel_histogram.html")
                 hist_fig.write_html(html_path_histogram)
-st.subheader("Радиальная «Звезда гласных» с нормами")
+                # === НОВЫЙ ГРАФИК 3: РАДИАЛЬНАЯ ЗВЕЗДА ===
+                st.subheader("Радиальная «Звезда гласных» с нормами")
                 gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="radar_gender")
                 fig_radar = plot_radar_vowel_star(vowel_data, audio_path, gender=gender)
                 if fig_radar:
@@ -540,6 +541,15 @@ st.subheader("Радиальная «Звезда гласных» с норма
                     radar_html = os.path.join(OUTPUT_DIR, f"{base_name}_radar_star.html")
                     fig_radar.write_html(radar_html)
 
+                # === НОВЫЙ ГРАФИК 4: K-MEANS КЛАСТЕРИЗАЦИЯ ===
+                st.subheader("F1–F2 карта с автоматической кластеризацией (k-means)")
+                fig_kmeans = plot_kmeans_formant_map(vowel_data, audio_path, n_clusters=6)
+                if fig_kmeans:
+                    st.plotly_chart(fig_kmeans, use_container_width=True)
+                    kmeans_csv = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
+                    st.download_button("Скачать данные (k-means)", kmeans_csv, f"{base_name}_kmeans_data.csv", "text/csv")
+                    kmeans_html = os.path.join(OUTPUT_DIR, f"{base_name}_kmeans_map.html")
+                    fig_kmeans.write_html(kmeans_html)
                 # === НОВЫЙ ГРАФИК 4: K-MEANS КЛАСТЕРИЗАЦИЯ ===
                 st.subheader("F1–F2 карта с автоматической кластеризацией (k-means)")
                 fig_kmeans = plot_kmeans_formant_map(vowel_data, audio_path, n_clusters=6)
