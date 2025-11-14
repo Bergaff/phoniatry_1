@@ -558,14 +558,20 @@ def main():
                 hist_fig.write_html(html_path_histogram)
                 # === РАДИАЛЬНАЯ ЗВЕЗДА С БЫСТРЫМ УПРАВЛЕНИЕМ ===
                 st.subheader("Радиальная «Звезда гласных» с нормами")
-                gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="radar_gender")
 
-                # Ключ для кэша: gender
+                # --- Выбор пола ---
+                gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="radar_gender_select")
+
+                # --- Кэшируем вычисление графика ---
+                @st.cache_data(show_spinner=False)
+                def get_radar_cached(_vowel_data, _audio_path, _gender):
+                    return plot_radar_vowel_star(_vowel_data, _audio_path, gender=_gender)
+
+                # --- Храним в session_state для UI ---
                 cache_key = f"radar_fig_{gender}"
-
                 if cache_key not in st.session_state:
                     with st.spinner(f"Построение звезды для {gender}..."):
-                        st.session_state[cache_key] = plot_radar_vowel_star(vowel_data, audio_path, gender=gender)
+                        st.session_state[cache_key] = get_radar_cached(vowel_data, audio_path, gender)
 
                 fig_radar = st.session_state[cache_key]
 
@@ -574,11 +580,13 @@ def main():
                 else:
                     col1, col2 = st.columns(2)
                     with col1:
-                        if st.button("Показать всё", key="show_all_radar"):
+                        if st.button("Показать всё", key=f"radar_show_{gender}"):
                             fig_radar.update_traces(visible=True)
+                            st.session_state[cache_key] = fig_radar  # сохраняем изменения
                     with col2:
-                        if st.button("Скрыть всё", key="hide_all_radar"):
+                        if st.button("Скрыть всё", key=f"radar_hide_{gender}"):
                             fig_radar.update_traces(visible='legendonly')
+                            st.session_state[cache_key] = fig_radar
 
                     st.plotly_chart(fig_radar, use_container_width=True, config={'displayModeBar': True})
 
@@ -589,11 +597,16 @@ def main():
 
                 # === НОВЫЙ ГРАФИК 4: K-MEANS КЛАСТЕРИЗАЦИЯ ===
                                # === K-MEANS С БЫСТРЫМ УПРАВЛЕНИЕМ ===
+               # === K-MEANS — БЕЗ ЛАГОВ (cache_data + session_state) ===
                 st.subheader("F1–F2 карта с автоматической кластеризацией (k-means)")
+
+                @st.cache_data(show_spinner=False)
+                def get_kmeans_cached(_vowel_data, _audio_path):
+                    return plot_kmeans_formant_map(_vowel_data, _audio_path, n_clusters=6)
 
                 if 'kmeans_fig' not in st.session_state:
                     with st.spinner("Кластеризация гласных..."):
-                        st.session_state.kmeans_fig = plot_kmeans_formant_map(vowel_data, audio_path, n_clusters=6)
+                        st.session_state.kmeans_fig = get_kmeans_cached(vowel_data, audio_path)
 
                 fig_kmeans = st.session_state.kmeans_fig
 
@@ -602,11 +615,13 @@ def main():
                 else:
                     col1, col2 = st.columns(2)
                     with col1:
-                        if st.button("Показать всё", key="show_all_kmeans"):
+                        if st.button("Показать всё", key="kmeans_show_all"):
                             fig_kmeans.update_traces(visible=True)
+                            st.session_state.kmeans_fig = fig_kmeans
                     with col2:
-                        if st.button("Скрыть всё", key="hide_all_kmeans"):
+                        if st.button("Скрыть всё", key="kmeans_hide_all"):
                             fig_kmeans.update_traces(visible='legendonly')
+                            st.session_state.kmeans_fig = fig_kmeans
 
                     st.plotly_chart(fig_kmeans, use_container_width=True, config={'displayModeBar': True})
 
