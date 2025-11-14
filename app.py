@@ -560,11 +560,15 @@ def main():
                 st.subheader("Радиальная «Звезда гласных» с нормами")
                 gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="radar_gender")
 
-                # Кэшируем график
-                if 'radar_fig' not in st.session_state:
-                    st.session_state.radar_fig = plot_radar_vowel_star(vowel_data, audio_path, gender=gender)
+                # Ключ для кэша: gender
+                cache_key = f"radar_fig_{gender}"
 
-                fig_radar = st.session_state.radar_fig
+                if cache_key not in st.session_state:
+                    with st.spinner(f"Построение звезды для {gender}..."):
+                        st.session_state[cache_key] = plot_radar_vowel_star(vowel_data, audio_path, gender=gender)
+
+                fig_radar = st.session_state[cache_key]
+
                 if not fig_radar or len(fig_radar.data) == 0:
                     st.warning("Нет данных для звезды.")
                 else:
@@ -588,9 +592,11 @@ def main():
                 st.subheader("F1–F2 карта с автоматической кластеризацией (k-means)")
 
                 if 'kmeans_fig' not in st.session_state:
-                    st.session_state.kmeans_fig = plot_kmeans_formant_map(vowel_data, audio_path, n_clusters=6)
+                    with st.spinner("Кластеризация гласных..."):
+                        st.session_state.kmeans_fig = plot_kmeans_formant_map(vowel_data, audio_path, n_clusters=6)
 
                 fig_kmeans = st.session_state.kmeans_fig
+
                 if not fig_kmeans or len(fig_kmeans.data) == 0:
                     st.warning("Нет данных для кластеризации.")
                 else:
@@ -602,31 +608,12 @@ def main():
                         if st.button("Скрыть всё", key="hide_all_kmeans"):
                             fig_kmeans.update_traces(visible='legendonly')
 
-                    if len(fig_kmeans.data) > 0:
-                        st.plotly_chart(fig_kmeans, use_container_width=True, config={'displayModeBar': True})
+                    st.plotly_chart(fig_kmeans, use_container_width=True, config={'displayModeBar': True})
 
                     kmeans_csv = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
                     st.download_button("Скачать данные (k-means)", kmeans_csv, f"{base_name}_kmeans_data.csv", "text/csv")
                     kmeans_html = os.path.join(OUTPUT_DIR, f"{base_name}_kmeans_map.html")
                     fig_kmeans.write_html(kmeans_html)
-                # Построение 3D-графика с многоугольниками
-                st.subheader("3D-карта гласных (нормализованная длительность)")
-                fig_3d = plot_3d_with_polygons(vowel_data, audio_path)
-                if fig_3d:
-                    st.plotly_chart(fig_3d, use_container_width=True)
-
-                # Добавление кнопки для скачивания CSV третьего графика
-                df_vowel_discrete = pd.DataFrame(vowel_data)[['vowel', 'F1', 'F2', 'duration', 'mean_pitch', 'mean_intensity', 'total_energy']]
-                csv = df_vowel_discrete.to_csv(index=False).encode('utf-8-sig')
-                st.download_button(
-                    label="Скачать данные графика в CSV",
-                    data=csv,
-                    file_name=f"{base_name}_vowel_formants_data.csv",
-                    mime="text/csv"
-                )
-
-                html_path_3d = os.path.join(OUTPUT_DIR, f"{base_name}_vowel_3d_with_polygons.html")
-                fig_3d.write_html(html_path_3d)
 
 if __name__ == "__main__":
     main()
