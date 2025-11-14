@@ -557,17 +557,9 @@ def main():
                 html_path_histogram = os.path.join(OUTPUT_DIR, f"{base_name}_vowel_histogram.html")
                 hist_fig.write_html(html_path_histogram)
                 # === РАДИАЛЬНАЯ ЗВЕЗДА С БЫСТРЫМ УПРАВЛЕНИЕМ ===
-                st.subheader("Радиальная «Звезда гласных» с нормами")
-
-                # --- Выбор пола ---
+               st.subheader("Радиальная «Звезда гласных» с нормами")
                 gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="radar_gender_select")
 
-                # --- Кэшируем вычисление графика ---
-                @st.cache_data(show_spinner=False)
-                def get_radar_cached(_vowel_data, _audio_path, _gender):
-                    return plot_radar_vowel_star(_vowel_data, _audio_path, gender=_gender)
-
-                # --- Храним в session_state для UI ---
                 cache_key = f"radar_fig_{gender}"
                 if cache_key not in st.session_state:
                     with st.spinner(f"Построение звезды для {gender}..."):
@@ -582,7 +574,7 @@ def main():
                     with col1:
                         if st.button("Показать всё", key=f"radar_show_{gender}"):
                             fig_radar.update_traces(visible=True)
-                            st.session_state[cache_key] = fig_radar  # сохраняем изменения
+                            st.session_state[cache_key] = fig_radar
                     with col2:
                         if st.button("Скрыть всё", key=f"radar_hide_{gender}"):
                             fig_radar.update_traces(visible='legendonly')
@@ -598,11 +590,8 @@ def main():
                 # === НОВЫЙ ГРАФИК 4: K-MEANS КЛАСТЕРИЗАЦИЯ ===
                                # === K-MEANS С БЫСТРЫМ УПРАВЛЕНИЕМ ===
                # === K-MEANS — БЕЗ ЛАГОВ (cache_data + session_state) ===
+                  # === K-MEANS — МГНОВЕННО ===
                 st.subheader("F1–F2 карта с автоматической кластеризацией (k-means)")
-
-                @st.cache_data(show_spinner=False)
-                def get_kmeans_cached(_vowel_data, _audio_path):
-                    return plot_kmeans_formant_map(_vowel_data, _audio_path, n_clusters=6)
 
                 if 'kmeans_fig' not in st.session_state:
                     with st.spinner("Кластеризация гласных..."):
@@ -631,4 +620,14 @@ def main():
                     fig_kmeans.write_html(kmeans_html)
 
 if __name__ == "__main__":
+  
+# === КЭШИРОВАННЫЕ ФУНКЦИИ (ВНЕ main!) ===
+@st.cache_data(show_spinner=False)
+def get_radar_cached(_vowel_data, _audio_path, _gender):
+    return plot_radar_vowel_star(_vowel_data, _audio_path, gender=_gender)
+
+@st.cache_data(show_spinner=False)
+def get_kmeans_cached(_vowel_data, _audio_path):
+    return plot_kmeans_formant_map(_vowel_data, _audio_path, n_clusters=6)
+
     main()
