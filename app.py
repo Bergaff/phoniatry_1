@@ -564,7 +564,7 @@ def main():
                 html_path_histogram = os.path.join(OUTPUT_DIR, f"{base_name}_vowel_histogram.html")
                 hist_fig.write_html(html_path_histogram)
                 # === РАДИАЛЬНАЯ ЗВЕЗДА С БЫСТРЫМ УПРАВЛЕНИЕМ ===
-               st.subheader("Радиальная «Звезда гласных» с нормами")
+                st.subheader("Радиальная «Звезда гласных» с нормами")
                 gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="radar_gender_select")
 
                 cache_key = f"radar_fig_{gender}"
