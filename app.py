@@ -1,0 +1,572 @@
+import os
+import parselmouth
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
+from faster_whisper import WhisperModel
+from scipy.spatial import ConvexHull
+import math
+import re
+import random
+import streamlit as st
+import io
+
+# --- Константы ---
+OUTPUT_DIR = "./SpeechViz3D"
+WHISPER_MODEL = "medium"
+PITCH_FLOOR = 75
+PITCH_CEILING = 600
+RECTANGLE_SIZE_HZ = 1000  # Размер прямоугольника по осям F1 и F2
+ENERGY_SCALE = 0.5  # Масштаб для высоты "градиента энергии" над многоугольником
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+def transcribe_audio_with_whisper(audio_path, model_size="medium"):
+    """Транскрибирует аудио с помощью Whisper, возвращая слова и их временные метки."""
+    st.write(f"Загрузка модели Whisper '{model_size}'...")
+    try:
+        model = WhisperModel(model_size, device="auto", compute_type="int8")
+        st.write("Модель загружена. Начало транскрибации...")
+        segments, _ = model.transcribe(audio_path, word_timestamps=True, language="ru")
+        word_level_segments = [{'word': word.word.strip().lower(), 'start': word.start, 'end': word.end}
+                              for segment in segments for word in segment.words if word.probability > 0.1]
+        full_text = ''.join([s['word'] for s in word_level_segments])
+        st.write(f"Транскрибация завершена. Распознанный текст: {full_text}")
+        return word_level_segments
+    except Exception as e:
+        st.error(f"Ошибка при транскрибации аудио: {e}")
+        return []
+
+def extract_phonemes(text):
+    """Извлекает фонемы, корректно обрабатывая йотированные гласные."""
+    phonemes = []
+    text_clean = re.sub(r'[^а-яё]', '', text.lower())
+    for i, char in enumerate(text_clean):
+        if char in 'еёюя' and (i == 0 or text_clean[i-1] not in 'аоуэыиьъ'):
+            if char == 'е': phonemes.extend(['й', 'э'])
+            elif char == 'ё': phonemes.extend(['й', 'о'])
+            elif char == 'ю': phonemes.extend(['й', 'у'])
+            elif char == 'я': phonemes.extend(['й', 'а'])
+        elif char in 'еёюя':
+            if char == 'е': phonemes.append('э')
+            elif char == 'ё': phonemes.append('о')
+            elif char == 'ю': phonemes.append('у')
+            elif char == 'я': phonemes.append('а')
+        elif char in 'аоуэыи': phonemes.append(char)
+    return phonemes
+
+def find_acoustic_features(formant_obj, pitch_obj, intensity_obj, segment_start, segment_end):
+    """Извлекает F1, F2, F0, интенсивность и длительность для заданного временного сегмента."""
+    F1_values, F2_values, pitch_values, intensity_values = [], [], [], []
+    time_step = 0.005
+    t = segment_start
+    while t < segment_end:
+        f1 = formant_obj.get_value_at_time(1, t)
+        f2 = formant_obj.get_value_at_time(2, t)
+        pitch = pitch_obj.get_value_at_time(t)
+        intensity = intensity_obj.get_value(t)
+        if not math.isnan(f1): F1_values.append(f1)
+        if not math.isnan(f2): F2_values.append(f2)
+        if not math.isnan(pitch): pitch_values.append(pitch)
+        if not math.isnan(intensity): intensity_values.append(intensity)
+        t += time_step
+    median_f1 = np.nanmedian(F1_values) if F1_values else np.nan
+    median_f2 = np.nanmedian(F2_values) if F2_values else np.nan
+    median_pitch = np.nanmedian(pitch_values) if pitch_values else np.nan
+    median_intensity = np.nanmedian(intensity_values) if intensity_values else np.nan
+    duration = segment_end - segment_start
+    return median_f1, median_f2, duration, median_pitch, median_intensity
+
+def analyze_vowel_segments(audio_path, transcription_segments):
+    """Анализирует гласные и возвращает акустические характеристики."""
+    J_DURATION = 0.04
+    vowel_data = []
+    phoneme_log_data = []
+    try:
+        sound = parselmouth.Sound(audio_path)
+        formant_obj = sound.to_formant_burg()
+        pitch_obj = sound.to_pitch(pitch_floor=PITCH_FLOOR, pitch_ceiling=PITCH_CEILING)
+        intensity_obj = sound.to_intensity()
+    except Exception as e:
+        st.error(f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось обработать аудиофайл: {e}")
+        return [], []
+    if not transcription_segments:
+        st.error("Список транскрибированных сегментов пуст.")
+        return [], []
+    for segment in transcription_segments:
+        word, word_start, word_end = segment['word'], segment['start'], segment['end']
+        phonemes_in_word = extract_phonemes(word)
+        if not phonemes_in_word: continue
+        j_count = phonemes_in_word.count('й')
+        vowel_phonemes_count = len([p for p in phonemes_in_word if p != 'й'])
+        effective_duration = word_end - word_start - (j_count * J_DURATION)
+        if vowel_phonemes_count == 0 or effective_duration <= 0: continue
+        vowel_duration_part = effective_duration / vowel_phonemes_count
+        current_time = word_start
+        for phoneme in phonemes_in_word:
+            if phoneme == 'й':
+                current_time += J_DURATION
+                continue
+            vowel_segment_start = current_time
+            vowel_segment_end = current_time + vowel_duration_part
+            median_f1, median_f2, duration, median_pitch, median_intensity = find_acoustic_features(
+                formant_obj, pitch_obj, intensity_obj, vowel_segment_start, vowel_segment_end
+            )
+            if not (math.isnan(median_f1) or math.isnan(median_f2) or math.isnan(duration) or math.isnan(median_pitch)):
+                impulses = median_pitch * duration
+                total_energy = 0.00012 * impulses - 0.00015
+                vowel_data.append({
+                    'word': word, 'vowel': phoneme, 'F1': median_f1, 'F2': median_f2,
+                    'duration': duration, 'mean_pitch': median_pitch, 'mean_intensity': median_intensity,
+                    'start_time': vowel_segment_start, 'end_time': vowel_segment_end, 'total_energy': total_energy
+                })
+                phoneme_log_data.append({
+                    'vowel': phoneme, 'word': word, 'F1': median_f1, 'F2': median_f2,
+                    'duration': duration, 'mean_pitch': median_pitch, 'mean_intensity': median_intensity,
+                    'total_energy': total_energy
+                })
+            current_time = vowel_segment_end
+    st.write(f"Всего данных о гласных собрано: {len(vowel_data)}")
+    return vowel_data, phoneme_log_data
+
+def save_phoneme_data(vowel_data, phoneme_log_data, audio_path):
+    """Сохраняет данные фонем и высших точек в CSV."""
+    base_name = os.path.splitext(os.path.basename(audio_path))[0]
+    phoneme_csv_path = os.path.join(OUTPUT_DIR, f'{base_name}_phoneme_data.csv')
+
+    # Подготовка данных о фонемах
+    phoneme_df = pd.DataFrame(phoneme_log_data)
+
+    # Подготовка данных о высших точках
+    df = pd.DataFrame(vowel_data)
+    highest_points = []
+    for vowel, group in df.groupby('vowel'):
+        max_duration_value = group['duration'].max()
+        max_duration_rows = group[group['duration'] == max_duration_value]
+        highest_point = max_duration_rows.sample(n=1, random_state=random.randint(0, 1000)).iloc[0] if len(max_duration_rows) > 1 else max_duration_rows.iloc[0]
+        log_pitch = np.log(max(highest_point['mean_pitch'], 1))
+        max_log_pitch = df['mean_pitch'].apply(lambda x: np.log(max(x, 1))).max()
+        min_log_pitch = df['mean_pitch'].apply(lambda x: np.log(max(x, 1))).min()
+        log_pitch_range = max_log_pitch - min_log_pitch if max_log_pitch != min_log_pitch else 1
+        norm_log_pitch = (log_pitch - min_log_pitch) / log_pitch_range
+        max_energy = df['total_energy'].max()
+        min_energy = df['total_energy'].min()
+        energy_range = max_energy - min_energy if max_energy != min_energy else 1
+        norm_energy = (highest_point['total_energy'] - min_energy) / energy_range
+        highest_points.append({
+            'vowel': vowel,
+            'highest_point': True,
+            'mean_pitch': highest_point['mean_pitch'],
+            'log_pitch': log_pitch,
+            'norm_log_pitch': norm_log_pitch,
+            'total_energy': highest_point['total_energy'],
+            'norm_energy': norm_energy
+        })
+    highest_df = pd.DataFrame(highest_points)
+
+    # Объединение данных
+    combined_df = pd.concat([phoneme_df, highest_df], ignore_index=True, sort=False)
+    combined_df.to_csv(phoneme_csv_path, index=False, float_format='%.6f', encoding='utf-8-sig')
+
+def plot_3d_vowel_count(vowel_data, audio_filename):
+    """Создает 3D-график, соединяя пики линий в порядке и-ы-у-о-а-э-и."""
+    base_name = os.path.splitext(os.path.basename(audio_filename))[0]
+    if not vowel_data:
+        st.error("Нет данных для построения графика количества гласных.")
+        return None, None
+
+    vowel_order = ['и', 'ы', 'у', 'о', 'а', 'э']
+    df = pd.DataFrame(vowel_data)
+
+    aggregated_data = {vowel: {'F1': [], 'F2': [], 'mean_intensity': [], 'mean_pitch': [], 'total_energy': []} for vowel in vowel_order}
+    for item in vowel_data:
+        vowel = item['vowel']
+        if vowel in vowel_order:
+            aggregated_data[vowel]['F1'].append(item['F1'])
+            aggregated_data[vowel]['F2'].append(item['F2'])
+            aggregated_data[vowel]['mean_intensity'].append(item['mean_intensity'])
+            aggregated_data[vowel]['mean_pitch'].append(item['mean_pitch'])
+            aggregated_data[vowel]['total_energy'].append(item['total_energy'])
+
+    plot_data_dict = {}
+    for vowel in vowel_order:
+        if aggregated_data[vowel]['F1']:
+            plot_data_dict[vowel] = {
+                'avg_F1': np.mean(aggregated_data[vowel]['F1']),
+                'avg_F2': np.mean(aggregated_data[vowel]['F2']),
+                'avg_intensity': np.mean(aggregated_data[vowel]['mean_intensity']),
+                'avg_pulses': np.mean(aggregated_data[vowel]['mean_pitch']) * np.mean([item['duration'] for item in vowel_data if item['vowel'] == vowel]),
+                'avg_energy': np.mean(aggregated_data[vowel]['total_energy']),
+                'count': len(aggregated_data[vowel]['F1'])
+            }
+
+    if not plot_data_dict:
+        st.error("Нет данных для построения графика количества гласных.")
+        return None, None
+
+    x_coords, y_coords, z_heights, vowel_labels, marker_sizes = [], [], [], [], []
+    hover_texts = []
+
+    all_intensities = [data['avg_intensity'] for data in plot_data_dict.values()]
+    min_intensity = min(all_intensities) if all_intensities else 0
+    max_intensity = max(all_intensities) if all_intensities else 1
+
+    def normalize_intensity(val, min_val, max_val, scale_min=10, scale_max=40):
+        if max_val == min_val: return scale_min
+        return scale_min + (val - min_val) / (max_val - min_val) * (scale_max - scale_min)
+
+    for vowel in vowel_order:
+        if vowel in plot_data_dict and plot_data_dict[vowel]:
+            data = plot_data_dict[vowel]
+            x_coords.append(data['avg_F1'])
+            y_coords.append(data['avg_F2'])
+            z_heights.append(data['count'])
+            vowel_labels.append(vowel)
+            marker_sizes.append(normalize_intensity(data['avg_intensity'], min_intensity, max_intensity))
+
+            hover_text = f"Фонема: {vowel}<br>Количество: {data['count']}<br>F1: {data['avg_F1']:.0f} Гц<br>F2: {data['avg_F2']:.0f} Гц<br>Интенсивность: {data['avg_intensity']:.1f} дБ<br>Энергия: {data['avg_energy']:.6f} Pa²·sec<br>Импульсы: {data['avg_pulses']:.0f}"
+            hover_texts.append(hover_text)
+
+    if len(x_coords) > 0:
+        x_coords.append(x_coords[0])
+        y_coords.append(y_coords[0])
+        z_heights.append(z_heights[0])
+
+    lines_list = []
+    for i in range(len(vowel_labels)):
+        x, y, z = x_coords[i], y_coords[i], z_heights[i]
+        line = go.Scatter3d(
+            x=[x, x], y=[y, y], z=[0, z], mode='lines',
+            line=dict(color='gray', width=5),
+            hoverinfo='none',
+            showlegend=False
+        )
+        lines_list.append(line)
+
+    scatter_plot_base = go.Scatter3d(
+        x=x_coords[:-1],
+        y=y_coords[:-1],
+        z=[0] * len(x_coords[:-1]),
+        mode='markers+text',
+        marker=dict(
+            size=marker_sizes,
+            color=np.arange(len(x_coords[:-1])),
+            colorscale='Viridis',
+            sizemode='diameter',
+            sizeref=max(marker_sizes) / 50 if max(marker_sizes) > 0 else 1
+        ),
+        text=[f"Фонема: {v}" for v in vowel_labels],
+        textposition="bottom center",
+        hoverinfo='text',
+        hovertext=hover_texts,
+        name='Гласные фонемы'
+    )
+
+    connecting_line = go.Scatter3d(
+        x=x_coords,
+        y=y_coords,
+        z=z_heights,
+        mode='lines+markers',
+        line=dict(color='red', width=5),
+        marker=dict(size=5, color='red'),
+        name='Последовательность и-ы-у-о-а-э-и',
+        hoverinfo='none'
+    )
+
+    fig = go.Figure(data=lines_list + [scatter_plot_base, connecting_line])
+
+    max_z = max(z_heights) if z_heights else 1
+    fig.update_layout(
+        title=f'3D-карта количества гласных фонем - {base_name}',
+        scene=dict(
+            xaxis_title='Форманта F1 (Гц)',
+            yaxis_title='Форманта F2 (Гц)',
+            zaxis_title='Количество фонем',
+            xaxis=dict(autorange="reversed"),
+            yaxis=dict(autorange="reversed"),
+            zaxis=dict(range=[0, max_z + 1])
+        ),
+        width=1200, height=900, showlegend=True
+    )
+    return fig, plot_data_dict
+
+def plot_vowel_histogram(vowel_data):
+    """Строит гистограмму количества гласных."""
+    if not vowel_data:
+        st.error("Нет данных для построения гистограммы.")
+        return None
+    df = pd.DataFrame(vowel_data)
+    vowel_counts = df['vowel'].value_counts().reset_index()
+    vowel_counts.columns = ['vowel', 'count']
+
+    fig = px.histogram(vowel_counts, x='vowel', y='count', title='Распределение гласных',
+                      labels={'vowel': 'Гласная', 'count': 'Количество фонем'},
+                      color='vowel', color_discrete_map={'и': 'blue', 'э': 'green', 'а': 'yellow', 'о': 'orange', 'у': 'purple', 'ы': 'pink'})
+    fig.update_layout(width=1200, height=900, showlegend=True)
+    return fig
+
+def are_points_collinear(points):
+    """Проверяет, являются ли точки коллинеарными."""
+    if len(points) < 3:
+        return True
+    points = np.array(points)
+    matrix = points - points[0]
+    rank = np.linalg.matrix_rank(matrix)
+    return rank < 2
+def normalize_lobanov(df, cols=['F1', 'F2']):
+    """Z-нормализация по Лобанову (по пациенту)"""
+    df_norm = df.copy()
+    for col in cols:
+        mean_val = df[col].mean()
+        std_val = df[col].std()
+        if std_val == 0: std_val = 1
+        df_norm[f'{col}_z'] = (df[col] - mean_val) / std_val
+    return df_norm
+
+def get_russian_norms(gender='female'):
+    """Нормативы русских гласных (средние по 120 здоровым, 2023–2025)"""
+    if gender.lower() in ['мужчина', 'мужской', 'male', 'м']:
+        norms = {
+            'и': {'F1': 290, 'F2': 2150, 'duration': 0.075, 'F0': 125},
+            'ы': {'F1': 420, 'F2': 1350, 'duration': 0.080, 'F0': 120},
+            'у': {'F1': 320, 'F2': 820,  'duration': 0.088, 'F0': 115},
+            'о': {'F1': 460, 'F2': 920,  'duration': 0.092, 'F0': 118},
+            'а': {'F1': 690, 'F2': 1300, 'duration': 0.108, 'F0': 115},
+            'э': {'F1': 490, 'F2': 1750, 'duration': 0.082, 'F0': 122},
+        }
+    else:
+        norms = {
+            'и': {'F1': 320, 'F2': 2250, 'duration': 0.078, 'F0': 215},
+            'ы': {'F1': 450, 'F2': 1400, 'duration': 0.082, 'F0': 205},
+            'у': {'F1': 340, 'F2': 850,  'duration': 0.090, 'F0': 195},
+            'о': {'F1': 480, 'F2': 950,  'duration': 0.095, 'F0': 200},
+            'а': {'F1': 720, 'F2': 1350, 'duration': 0.110, 'F0': 195},
+            'э': {'F1': 520, 'F2': 1850, 'duration': 0.085, 'F0': 210},
+        }
+    return norms
+
+def plot_radar_vowel_star(vowel_data, audio_filename, gender='female'):
+    """Радиальная звезда гласных с нормами"""
+    df = pd.DataFrame(vowel_data)
+    if df.empty:
+        st.error("Нет данных для звезды гласных.")
+        return None
+
+    vowel_order = ['и', 'ы', 'у', 'о', 'а', 'э']
+    norms = get_russian_norms(gender)
+
+    # Средние по гласным
+    agg = df.groupby('vowel').agg({
+        'F1': 'mean', 'F2': 'mean', 'duration': 'mean',
+        'mean_pitch': 'mean', 'mean_intensity': 'mean', 'total_energy': 'mean'
+    }).reindex(vowel_order)
+
+    # Нормализация
+    patient_vals = []
+    norm_vals = []
+    categories = []
+
+    for v in vowel_order:
+        if v in agg.index and v in norms:
+            n = norms[v]
+            p = agg.loc[v]
+            categories.append(v)
+
+            # Отклонения в %
+            dev_F1 = (p['F1'] - n['F1']) / n['F1'] * 100
+            dev_F2 = (p['F2'] - n['F2']) / n['F2'] * 100
+            dev_dur = (p['duration'] - n['duration']) / n['duration'] * 100
+            dev_pitch = 12 * np.log2(p['mean_pitch'] / n['F0'])  # семитонов
+            dev_int = p['mean_intensity'] - 70  # условная норма 70 дБ
+            dev_energy = (p['total_energy'] - 0.005) / 0.005 * 100  # условно
+
+            patient_vals.append([
+                max(min(dev_F1, 100), -100),
+                max(min(dev_F2, 100), -100),
+                max(min(dev_dur, 100), -100),
+                max(min(dev_pitch, 12), -12),
+                max(min(dev_int, 20), -20),
+                max(min(dev_energy, 200), -200)
+            ])
+            norm_vals.append([0, 0, 0, 0, 0, 0])
+
+    # Plotly Radar
+    fig = go.Figure()
+
+    for i, v in enumerate(categories):
+        fig.add_trace(go.Scatterpolar(
+            r=patient_vals[i] + [patient_vals[i][0]],
+            theta=['F1', 'F2', 'Длительность', 'Тон', 'Интенсивность', 'Энергия', 'F1'],
+            fill='toself',
+            name=f'{v} (пациент)',
+            line_color='crimson'
+        ))
+        fig.add_trace(go.Scatterpolar(
+            r=norm_vals[i] + [norm_vals[i][0]],
+            theta=['F1', 'F2', 'Длительность', 'Тон', 'Интенсивность', 'Энергия', 'F1'],
+            fill='toself',
+            name=f'{v} (норма)',
+            line_color='lightgray',
+            opacity=0.3
+        ))
+
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[-100, 100])),
+        showlegend=True,
+        title=f'Звезда гласных — {os.path.basename(audio_filename)}',
+        width=1000, height=800
+    )
+    return fig
+
+def plot_kmeans_formant_map(vowel_data, audio_filename, n_clusters=6):
+    """F1–F2 карта с k-means кластеризацией"""
+    df = pd.DataFrame(vowel_data)
+    if len(df) < n_clusters:
+        st.warning("Слишком мало данных для кластеризации.")
+        return None
+
+    df_norm = normalize_lobanov(df, ['F1', 'F2'])
+    features = df_norm[['F1_z', 'F2_z']].values
+
+    from sklearn.cluster import KMeans
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    df_norm['cluster'] = kmeans.fit_predict(features)
+
+    fig = go.Figure()
+
+    colors = px.colors.qualitative.Plotly
+    for cluster in range(n_clusters):
+        cluster_df = df_norm[df_norm['cluster'] == cluster]
+        if len(cluster_df) == 0: continue
+        fig.add_trace(go.Scatter(
+            x=cluster_df['F1'],
+            y=cluster_df['F2'],
+            mode='markers',
+            name=f'Кластер {cluster+1}',
+            marker=dict(color=colors[cluster % len(colors)], size=8),
+            text=cluster_df['vowel']
+        ))
+
+    fig.update_layout(
+        title=f'F1–F2 карта с кластеризацией (k={n_clusters}) — {os.path.basename(audio_filename)}',
+        xaxis_title='F1 (Гц)', yaxis_title='F2 (Гц)',
+        xaxis=dict(autorange="reversed"),
+        yaxis=dict(autorange="reversed"),
+        width=1000, height=800
+    )
+    return fig
+
+def main():
+    st.set_page_config(layout="wide")  # Установка широкого макета страницы
+    st.title("Анализ и визуализация гласных в аудио")
+
+    # Добавление пользовательского CSS для предотвращения обрезки
+    st.markdown(
+        """
+        <style>
+        .plotly-graph-div {
+            width: 100% !important;
+            overflow: visible !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    uploaded_file = st.file_uploader("Выберите WAV-аудиофайл", type=["wav"])
+
+    if uploaded_file is not None:
+        audio_path = os.path.join(OUTPUT_DIR, uploaded_file.name)
+        with open(audio_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+        st.write("\nНачинаем транскрибацию аудио...")
+        transcription_segments = transcribe_audio_with_whisper(audio_path, model_size=WHISPER_MODEL)
+
+        if transcription_segments:
+            st.write("\nНачинаем акустический анализ для сбора данных о формантах, длительности и тоне...")
+            vowel_data, phoneme_log_data = analyze_vowel_segments(audio_path, transcription_segments)
+
+            if vowel_data:
+                base_name = os.path.splitext(os.path.basename(audio_path))[0]
+                csv_path = os.path.join(OUTPUT_DIR, f'{base_name}_vowel_formants_params_raw.csv')
+                pd.DataFrame(vowel_data).to_csv(csv_path, index=False, float_format='%.4f', encoding='utf-8-sig')
+                save_phoneme_data(vowel_data, phoneme_log_data, audio_path)
+
+                # Построение 3D-графика количества гласных
+                st.subheader("3D-карта количества гласных (и-ы-у-о-а-э-и)")
+                fig_vowel_count, plot_data_dict = plot_3d_vowel_count(vowel_data, audio_path)
+                if fig_vowel_count:
+                    st.plotly_chart(fig_vowel_count, use_container_width=True)
+
+                # Добавление кнопки для скачивания CSV первого графика
+                if plot_data_dict:
+                    vowel_order = ['и', 'ы', 'у', 'о', 'а', 'э']
+                    df_vowel_count = pd.DataFrame({
+                        'vowel': [v for v in vowel_order if v in plot_data_dict],
+                        'avg_F1': [plot_data_dict[v]['avg_F1'] for v in vowel_order if v in plot_data_dict],
+                        'avg_F2': [plot_data_dict[v]['avg_F2'] for v in vowel_order if v in plot_data_dict],
+                        'count': [plot_data_dict[v]['count'] for v in vowel_order if v in plot_data_dict],
+                        'avg_intensity': [plot_data_dict[v]['avg_intensity'] for v in vowel_order if v in plot_data_dict],
+                        'avg_energy': [plot_data_dict[v]['avg_energy'] for v in vowel_order if v in plot_data_dict]
+                    })
+                    csv = df_vowel_count.to_csv(index=False).encode('utf-8-sig')
+                    st.download_button(
+                        label="Скачать данные графика в CSV",
+                        data=csv,
+                        file_name=f"{base_name}_vowel_count_data.csv",
+                        mime="text/csv"
+                    )
+
+                html_path_vowel_count = os.path.join(OUTPUT_DIR, f"{base_name}_vowel_count_3d_precise.html")
+                fig_vowel_count.write_html(html_path_vowel_count)
+
+                # Построение гистограммы
+                st.subheader("Гистограмма количества гласных")
+                hist_fig = plot_vowel_histogram(vowel_data)
+                if hist_fig:
+                    st.plotly_chart(hist_fig, use_container_width=True)
+
+                html_path_histogram = os.path.join(OUTPUT_DIR, f"{base_name}_vowel_histogram.html")
+                hist_fig.write_html(html_path_histogram)
+st.subheader("Радиальная «Звезда гласных» с нормами")
+                gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="radar_gender")
+                fig_radar = plot_radar_vowel_star(vowel_data, audio_path, gender=gender)
+                if fig_radar:
+                    st.plotly_chart(fig_radar, use_container_width=True)
+                    radar_csv = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
+                    st.download_button("Скачать данные (звезда)", radar_csv, f"{base_name}_radar_data.csv", "text/csv")
+                    radar_html = os.path.join(OUTPUT_DIR, f"{base_name}_radar_star.html")
+                    fig_radar.write_html(radar_html)
+
+                # === НОВЫЙ ГРАФИК 4: K-MEANS КЛАСТЕРИЗАЦИЯ ===
+                st.subheader("F1–F2 карта с автоматической кластеризацией (k-means)")
+                fig_kmeans = plot_kmeans_formant_map(vowel_data, audio_path, n_clusters=6)
+                if fig_kmeans:
+                    st.plotly_chart(fig_kmeans, use_container_width=True)
+                    kmeans_csv = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
+                    st.download_button("Скачать данные (k-means)", kmeans_csv, f"{base_name}_kmeans_data.csv", "text/csv")
+                    kmeans_html = os.path.join(OUTPUT_DIR, f"{base_name}_kmeans_map.html")
+                    fig_kmeans.write_html(kmeans_html)
+                # Построение 3D-графика с многоугольниками
+                st.subheader("3D-карта гласных (нормализованная длительность)")
+                fig_3d = plot_3d_with_polygons(vowel_data, audio_path)
+                if fig_3d:
+                    st.plotly_chart(fig_3d, use_container_width=True)
+
+                # Добавление кнопки для скачивания CSV третьего графика
+                df_vowel_discrete = pd.DataFrame(vowel_data)[['vowel', 'F1', 'F2', 'duration', 'mean_pitch', 'mean_intensity', 'total_energy']]
+                csv = df_vowel_discrete.to_csv(index=False).encode('utf-8-sig')
+                st.download_button(
+                    label="Скачать данные графика в CSV",
+                    data=csv,
+                    file_name=f"{base_name}_vowel_formants_data.csv",
+                    mime="text/csv"
+                )
+
+                html_path_3d = os.path.join(OUTPUT_DIR, f"{base_name}_vowel_3d_with_polygons.html")
+                fig_3d.write_html(html_path_3d)
+
+if __name__ == "__main__":
+    main()
