@@ -482,7 +482,14 @@ def plot_kmeans_formant_map(vowel_data, audio_filename, n_clusters=6):
         width=1000, height=800
     )
     return fig
+# === КЭШИРОВАННЫЕ ФУНКЦИИ (ВНЕ main!) ===
+@st.cache_data(show_spinner=False)
+def get_radar_cached(_vowel_data, _audio_path, _gender):
+    return plot_radar_vowel_star(_vowel_data, _audio_path, gender=_gender)
 
+@st.cache_data(show_spinner=False)
+def get_kmeans_cached(_vowel_data, _audio_path):
+    return plot_kmeans_formant_map(_vowel_data, _audio_path, n_clusters=6)
 def main():
     st.set_page_config(layout="wide")  # Установка широкого макета страницы
     st.title("Анализ и визуализация гласных в аудио")
@@ -620,14 +627,4 @@ def main():
                     fig_kmeans.write_html(kmeans_html)
 
 if __name__ == "__main__":
-  
-# === КЭШИРОВАННЫЕ ФУНКЦИИ (ВНЕ main!) ===
-@st.cache_data(show_spinner=False)
-def get_radar_cached(_vowel_data, _audio_path, _gender):
-    return plot_radar_vowel_star(_vowel_data, _audio_path, gender=_gender)
-
-@st.cache_data(show_spinner=False)
-def get_kmeans_cached(_vowel_data, _audio_path):
-    return plot_kmeans_formant_map(_vowel_data, _audio_path, n_clusters=6)
-
     main()
