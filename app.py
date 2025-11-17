@@ -533,7 +533,7 @@ def main():
                 save_phoneme_data(vowel_data, phoneme_log_data, audio_path)
 
                 # Кнопка скачивания ВСЕХ сырых данных (общая)
-                ccsv_all = pd.DataFrame(vowel_data).to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+                csv_all = pd.DataFrame(vowel_data).to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
                 st.download_button(
                     label="Скачать ВСЕ сырые данные гласных (CSV)",
                     data=csv_all,
