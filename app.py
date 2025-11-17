@@ -523,11 +523,11 @@ def main():
                     )
                 st.markdown("---")
 
+                               # ==================================================================
+                # 3. Радиальная звезда + КНОПКА СКАЧИВАНИЯ
                 # ==================================================================
-                # 3. Радиальная звезда
-                # ==================================================================
-              st.subheader("Радиальная «Звезда гласных» с нормами")
-              gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="gender_sel")
+                st.subheader("Радиальная «Звезда гласных» с нормами")
+                gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="gender_sel")
 
                 # Кэшируем и график, и данные для CSV
                 if "radar_data" not in st.session_state or st.session_state.get("last_gender_radar") != gender:
@@ -541,7 +541,7 @@ def main():
                 st.plotly_chart(fig_radar, use_container_width=True)
                 fig_radar.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_radar_star.html"))
 
-                # ВОЗВРАЩАЕМ КНОПКУ СКАЧИВАНИЯ!
+                # Кнопка скачивания данных звезды
                 radar_df = st.session_state.radar_df
                 csv_radar = radar_df.to_csv(index=True, encoding='utf-8-sig').encode('utf-8-sig')
                 st.download_button(
