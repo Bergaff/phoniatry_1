@@ -348,7 +348,7 @@ def get_russian_norms(gender='female'):
     return norms
 
 def plot_radar_vowel_star(vowel_data, audio_filename, gender='female'):
-    """Радиальная звезда гласных с нормами"""
+    """Радиальная звезда гласных с нормами — ИСПРАВЛЕННАЯ ВЕРСИЯ"""
     df = pd.DataFrame(vowel_data)
     if df.empty:
         st.error("Нет данных для звезды гласных.")
@@ -357,83 +357,74 @@ def plot_radar_vowel_star(vowel_data, audio_filename, gender='female'):
     vowel_order = ['и', 'ы', 'у', 'о', 'а', 'э']
     norms = get_russian_norms(gender)
 
-    # Средние по гласным
-    agg = df.groupby('vowel').agg({
-        'F1': 'mean', 'F2': 'mean', 'duration': 'mean',
-        'mean_pitch': 'mean', 'mean_intensity': 'mean', 'total_energy': 'mean'
-    }).reindex(vowel_order)
-
-    # Нормализация
-    patient_vals = []
-    norm_vals = []
-    categories = []
-
-    patient_vals = []
-    norm_vals = []
-    categories = []
-
-    # Считаем средние по каждой гласной отдельно
+    # Средние значения по каждой гласной
     agg = df.groupby('vowel').agg({
         'F1': 'mean',
-        'F2': 'mean', 
+        'F2': 'mean',
         'duration': 'mean',
         'mean_pitch': 'mean',
         'mean_intensity': 'mean',
         'total_energy': 'mean'
     }).reindex(vowel_order)
 
+    fig = go.Figure()
+
     for v in vowel_order:
-        if v not in agg.index or v not in norms:
+        if v not in agg.index or pd.isna(agg.loc[v, 'F1']):
             continue
-            
-        p = agg.loc[v]  # ← средние значения именно этой гласной
-        n = norms[v]    # ← норма для этой гласной
 
-        categories.append(v)
+        p = agg.loc[v]  # данные пациента для этой гласной
+        n = norms[v]    # норма для этой гласной
 
-        # Отклонения в %
+        # Отклонения
         dev_F1 = (p['F1'] - n['F1']) / n['F1'] * 100
         dev_F2 = (p['F2'] - n['F2']) / n['F2'] * 100
         dev_dur = (p['duration'] - n['duration']) / n['duration'] * 100
-        dev_pitch = 12 * np.log2(p['mean_pitch'] / n['F0'])  # в семитонах
-        dev_int = p['mean_intensity'] - 70  # условная норма 70 дБ
+        dev_pitch = 12 * np.log2(p['mean_pitch'] / n['F0'])  # семитоны
+        dev_int = p['mean_intensity'] - 70  # от условной нормы 70 дБ
         dev_energy = (p['total_energy'] - 0.005) / 0.005 * 100
 
-        patient_vals.append([
+        # Обрезаем выбросы
+        values = [
             max(min(dev_F1, 100), -100),
             max(min(dev_F2, 100), -100),
             max(min(dev_dur, 100), -100),
-            max(min(dev_pitch, 12), -12),
-            max(min(dev_int, 20), -20),
+            max(min(dev_pitch, 15), -15),
+            max(min(dev_int, 25), -25),
             max(min(dev_energy, 200), -200)
-        ])
-        norm_vals.append([0, 0, 0, 0, 0, 0])
+        ]
 
-    # Plotly Radar
-    fig = go.Figure()
-
-    for i, v in enumerate(categories):
+        # Пациент
         fig.add_trace(go.Scatterpolar(
-            r=patient_vals[i] + [patient_vals[i][0]],
-            theta=['F1', 'F2', 'Длительность', 'Тон', 'Интенсивность', 'Энергия', 'F1'],
+            r=values + [values[0]],
+            theta=['F1 %', 'F2 %', 'Длительность %', 'Тон (семитоны)', 'Интенсивность (от 70 дБ)', 'Энергия %', 'F1 %'],
             fill='toself',
             name=f'{v} (пациент)',
-            line_color='crimson'
+            line_color='crimson',
+            opacity=0.8
         ))
+
+        # Норма (нулевая линия)
         fig.add_trace(go.Scatterpolar(
-            r=norm_vals[i] + [norm_vals[i][0]],
-            theta=['F1', 'F2', 'Длительность', 'Тон', 'Интенсивность', 'Энергия', 'F1'],
+            r=[0, 0, 0, 0, 0, 0, 0],
+            theta=['F1 %', 'F2 %', 'Длительность %', 'Тон (семитоны)', 'Интенсивность (от 70 дБ)', 'Энергия %', 'F1 %'],
             fill='toself',
             name=f'{v} (норма)',
             line_color='lightgray',
-            opacity=0.3
+            opacity=0.3,
+            showlegend=False
         ))
 
     fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[-100, 100])),
+        polar=dict(
+            radialaxis=dict(visible=True, range=[-100, 100], tickmode='linear', dtick=25),
+            angularaxis=dict(direction="clockwise")
+        ),
         showlegend=True,
-        title=f'Звезда гласных — {os.path.basename(audio_filename)}',
-        width=1000, height=800
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        title=f'Звезда гласных — {os.path.basename(audio_filename)} ({gender})',
+        width=1000,
+        height=800
     )
     return fig
 
@@ -608,23 +599,7 @@ def main():
                 st.plotly_chart(fig_radar, use_container_width=True)
                 fig_radar.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_radar_star.html"))
 
-                # CSV для звезды — средние значения + отклонения от нормы
-                df_agg = pd.DataFrame(vowel_data).groupby('vowel').agg({
-                    'F1': 'mean', 'F2': 'mean', 'duration': 'mean',
-                    'mean_pitch': 'mean', 'mean_intensity': 'mean', 'total_energy': 'mean'
-                }).round(4)
-                norms = get_russian_norms(gender)
-                df_agg['norm_F1'] = df_agg.index.map(lambda v: norms.get(v, {}).get('F1', np.nan))
-                df_agg['norm_F2'] = df_agg.index.map(lambda v: norms.get(v, {}).get('F2', np.nan))
-                df_agg['dev_F1_%'] = ((df_agg['F1'] - df_agg['norm_F1']) / df_agg['norm_F1'] * 100).round(2)
-                df_agg['dev_F2_%'] = ((df_agg['F2'] - df_agg['norm_F2']) / df_agg['norm_F2'] * 100).round(2)
-                csv_radar = df_agg.to_csv(encoding='utf-8-sig').encode('utf-8-sig')
-                st.download_button(
-                    label="Скачать данные звезды гласных (CSV)",
-                    data=csv_radar,
-                    file_name=f"{base_name}_vowel_star_data.csv",
-                    mime="text/csv"
-                )
+ 
                 st.markdown("---")
 
                 # ==================================================================
