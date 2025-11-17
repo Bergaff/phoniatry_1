@@ -524,56 +524,53 @@ def main():
                 hist_fig = plot_vowel_histogram(vowel_data)
                 if hist_fig:
                     st.plotly_chart(hist_fig, use_container_width=True)
+                # =============================================
+                # 3. Радиальная звезда — мгновенное переключение
+                # =============================================
+                st.subheader("Радиальная «Звезда гласных» с нормами")
+                gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="gender_sel")
 
-                                # 3. Радиальная звезда — мгновенное переключение
-import streamlit as st
+                # Пересчитываем только если фигуры ещё нет ИЛИ сменился пол
+                if "fig_radar" not in st.session_state or st.session_state.get("last_gender") != gender:
+                    with st.spinner("Построение радиальной звезды..."):
+                        st.session_state.fig_radar = plot_radar_vowel_star(vowel_data, audio_path, gender=gender)
+                        st.session_state.last_gender = gender
 
-# ——————————————————————————————————————
-#  РАДИАЛЬНАЯ ЗВЕЗДА  (мгновенное скрытие/показ)
-# ——————————————————————————————————————
-st.subheader("Радиальная «Звезда гласных» с нормами")
-gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="gender_sel")
+                fig_radar = st.session_state.fig_radar
 
-# Один раз строим фигуру (или пересчитываем только при смене пола)
-if "fig_radar" not in st.session_state or st.session_state.get("last_gender") != gender:
-    with st.spinner("Построение/обновление радиальной звезды..."):
-        st.session_state.fig_radar = plot_radar_vowel_star(vowel_data, audio_path, gender=gender)
-        st.session_state.last_gender = gender
+                # Кнопки мгновенно меняют видимость (без st.rerun!)
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Показать всё (звезда)", key="show_radar_all"):
+                        fig_radar.update_traces(visible=True)
+                with col2:
+                    if st.button("Скрыть всё (звезда)", key="hide_radar_all"):
+                        fig_radar.update_traces(visible="legendonly")
 
-fig_radar = st.session_state.fig_radar
+                st.plotly_chart(fig_radar, use_container_width=True)
+                fig_radar.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_radar_star.html"))
 
-# Кнопки управления видимостью БЕЗ rerun
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("Показать всё (звезда)", key="show_radar"):
-        fig_radar.update_traces(visible=True)
-with col2:
-    if st.button("Скрыть всё (звезда)", key="hide_radar"):
-        fig_radar.update_traces(visible="legendonly")
+                # =============================================
+                # 4. K-means карта — тоже мгновенно
+                # =============================================
+                st.subheader("F1–F2 карта с k-means кластеризацией")
 
-st.plotly_chart(fig_radar, use_container_width=True, config={'displayModeBar': True})
-fig_radar.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_radar_star.html"))
+                if "fig_kmeans" not in st.session_state:
+                    with st.spinner("Выполняется кластеризация..."):
+                        st.session_state.fig_kmeans = plot_kmeans_formant_map(vowel_data, audio_path, n_clusters=6)
 
-                                # 4. K-means — точно так же, мгновенно
-sst.subheader("F1–F2 карта с k-means кластеризацией")
+                fig_kmeans = st.session_state.fig_kmeans
 
-# Один раз строим (или пересчитываем только если ещё нет)
-if "fig_kmeans" not in st.session_state:
-    with st.spinner("Кластеризация гласных..."):
-        st.session_state.fig_kmeans = plot_kmeans_formant_map(vowel_data, audio_path, n_clusters=6)
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Показать всё (k-means)", key="show_kmeans_all"):
+                        fig_kmeans.update_traces(visible=True)
+                with col2:
+                    if st.button("Скрыть всё (k-means)", key="hide_kmeans_all"):
+                        fig_kmeans.update_traces(visible="legendonly")
 
-fig_kmeans = st.session_state.fig_kmeans
-
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("Показать всё (k-means)", key="show_km"):
-        fig_kmeans.update_traces(visible=True)
-with col2:
-    if st.button("Скрыть всё (k-means)", key="hide_km"):
-        fig_kmeans.update_traces(visible="legendonly")
-
-st.plotly_chart(fig_kmeans, use_container_width=True)
-fig_kmeans.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_kmeans_map.html"))
+                st.plotly_chart(fig_kmeans, use_container_width=True)
+                fig_kmeans.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_kmeans_map.html"))
 
                 # Кнопки скачивания общие
 csv_all = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
