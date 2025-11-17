@@ -11,6 +11,7 @@ import re
 import random
 import streamlit as st
 import io
+import streamlit.components.v1 as components
 
 # --- Константы ---
 OUTPUT_DIR = "./SpeechViz3D"
@@ -539,13 +540,12 @@ def main():
                 hist_fig = plot_vowel_histogram(vowel_data)
                 if hist_fig:
                     st.plotly_chart(hist_fig, use_container_width=True)
-                # =============================================
-                # 3. Радиальная звезда — мгновенное переключение
+                               # =============================================
+                # 3. Радиальная звезда — МГНОВЕННОЕ скрытие/показ
                 # =============================================
                 st.subheader("Радиальная «Звезда гласных» с нормами")
                 gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="gender_sel")
 
-                # Пересчитываем только если фигуры ещё нет ИЛИ сменился пол
                 if "fig_radar" not in st.session_state or st.session_state.get("last_gender") != gender:
                     with st.spinner("Построение радиальной звезды..."):
                         st.session_state.fig_radar = plot_radar_vowel_star(vowel_data, audio_path, gender=gender)
@@ -553,20 +553,43 @@ def main():
 
                 fig_radar = st.session_state.fig_radar
 
-                # Кнопки мгновенно меняют видимость (без st.rerun!)
+                # Кнопки — теперь с мгновенным обновлением через config
                 col1, col2 = st.columns(2)
                 with col1:
                     if st.button("Показать всё (звезда)", key="show_radar_all"):
                         fig_radar.update_traces(visible=True)
+                        st.session_state.fig_radar = fig_radar  # сохраняем изменения
+
                 with col2:
                     if st.button("Скрыть всё (звезда)", key="hide_radar_all"):
                         fig_radar.update_traces(visible="legendonly")
+                        st.session_state.fig_radar = fig_radar
 
-                st.plotly_chart(fig_radar, use_container_width=True)
-                fig_radar.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_radar_star.html"))
+                # ОТКЛЮЧАЕМ АНИМАЦИЮ + принудительное обновление
+                st.plotly_chart(
+                    fig_radar,
+                    use_container_width=True,
+                    config={
+                        'displayModeBar': True,
+                        'displaylogo': False,
+                        'modeBarButtonsToRemove': ['zoom2d', 'pan2d', 'select2d', 'lasso2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d'],
+                        'toImageButtonOptions': {'format': 'svg', 'filename': 'vowel_star', 'height': 800, 'width': 1000, 'scale': 1}
+                    },
+                    # ЭТО САМОЕ ГЛАВНОЕ — ОТКЛЮЧАЕМ АНИМАЦИЮ
+                    config_update={'staticPlot': False},  # не помогает полностью
+                    # Вместо этого используем JS-хак:
+                    on_render="""
+                    function(fig) {
+                        fig.on('plotly_restyle', function() {
+                            // Отключаем анимацию при любом изменении видимости
+                            setTimeout(() => Plotly.Plots.resize(fig), 0);
+                        });
+                    }
+                    """
+                )
 
-                # =============================================
-                # 4. K-means карта — тоже мгновенно
+                             # =============================================
+                # 4. K-means карта — мгновенно!
                 # =============================================
                 st.subheader("F1–F2 карта с k-means кластеризацией")
 
@@ -580,12 +603,33 @@ def main():
                 with col1:
                     if st.button("Показать всё (k-means)", key="show_kmeans_all"):
                         fig_kmeans.update_traces(visible=True)
+                        st.session_state.fig_kmeans = fig_kmeans
+
                 with col2:
                     if st.button("Скрыть всё (k-means)", key="hide_kmeans_all"):
                         fig_kmeans.update_traces(visible="legendonly")
+                        st.session_state.fig_kmeans = fig_kmeans
 
                 st.plotly_chart(fig_kmeans, use_container_width=True)
-                fig_kmeans.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_kmeans_map.html"))
-
+# Отключаем анимацию глобально для всех Plotly графиков в приложении
+st.markdown("""
+<script>
+    // Отключаем анимацию для всех графиков Plotly
+    document.addEventListener("DOMContentLoaded", function() {
+        setTimeout(function() {
+            if (window.Plotly) {
+                Plotly.Fx.hover = function() {};  // отключаем ховер-анимацию
+                const update = {
+                    'transition': {'duration': 0},
+                    'frame': {'duration': 0, 'redraw': false}
+                };
+                document.querySelectorAll('.js-plotly-plot').forEach(plot => {
+                    Plotly.relayout(plot, update);
+                });
+            }
+        }, 500);
+    });
+</script>
+""", unsafe_allow_html=True)
 if __name__ == "__main__":
     main()
