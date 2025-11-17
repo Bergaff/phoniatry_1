@@ -587,9 +587,5 @@ def main():
                 st.plotly_chart(fig_kmeans, use_container_width=True)
                 fig_kmeans.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_kmeans_map.html"))
 
-                # Кнопки скачивания общие
-csv_all = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
-st.download_button("Скачать ВСЕ сырые данные гласных", csv_all, f"{base_name}_all_vowel_data.csv", "text/csv")
-
 if __name__ == "__main__":
     main()
