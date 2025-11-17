@@ -491,17 +491,13 @@ def get_radar_cached(_vowel_data, _audio_path, _gender):
 def get_kmeans_cached(_vowel_data, _audio_path):
     return plot_kmeans_formant_map(_vowel_data, _audio_path, n_clusters=6)
 def main():
-    st.set_page_config(layout="wide")  # Установка широкого макета страницы
+    st.set_page_config(layout="wide")
     st.title("Анализ и визуализация гласных в аудио")
 
-    # Добавление пользовательского CSS для предотвращения обрезки
     st.markdown(
         """
         <style>
-        .plotly-graph-div {
-            width: 100% !important;
-            overflow: visible !important;
-        }
+        .plotly-graph-div {width: 100% !important; overflow: visible !important;}
         </style>
         """,
         unsafe_allow_html=True
@@ -514,109 +510,92 @@ def main():
         with open(audio_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        st.write("\nНачинаем транскрибацию аудио...")
+        st.write("Начинаем транскрибацию аудио...")
         transcription_segments = transcribe_audio_with_whisper(audio_path, model_size=WHISPER_MODEL)
 
         if transcription_segments:
-            st.write("\nНачинаем акустический анализ для сбора данных о формантах, длительности и тоне...")
+            st.write("Акустический анализ гласных...")
             vowel_data, phoneme_log_data = analyze_vowel_segments(audio_path, transcription_segments)
 
             if vowel_data:
                 base_name = os.path.splitext(os.path.basename(audio_path))[0]
-                csv_path = os.path.join(OUTPUT_DIR, f'{base_name}_vowel_formants_params_raw.csv')
-                pd.DataFrame(vowel_data).to_csv(csv_path, index=False, float_format='%.4f', encoding='utf-8-sig')
+                pd.DataFrame(vowel_data).to_csv(
+                    os.path.join(OUTPUT_DIR, f'{base_name}_vowel_formants_params_raw.csv'),
+                    index=False, float_format='%.4f', encoding='utf-8-sig'
+                )
                 save_phoneme_data(vowel_data, phoneme_log_data, audio_path)
 
-                # Построение 3D-графика количества гласных
+                # 1. 3D-карта количества гласных
                 st.subheader("3D-карта количества гласных (и-ы-у-о-а-э-и)")
-                fig_vowel_count, plot_data_dict = plot_3d_vowel_count(vowel_data, audio_path)
-                if fig_vowel_count:
-                    st.plotly_chart(fig_vowel_count, use_container_width=True)
+                fig_3d, plot_data_dict = plot_3d_vowel_count(vowel_data, audio_path)
+                if fig_3d:
+                    st.plotly_chart(fig_3d, use_container_width=True)
+                    fig_3d.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_vowel_count_3d_precise.html"))
 
-                # Добавление кнопки для скачивания CSV первого графика
-                if plot_data_dict:
-                    vowel_order = ['и', 'ы', 'у', 'о', 'а', 'э']
-                    df_vowel_count = pd.DataFrame({
-                        'vowel': [v for v in vowel_order if v in plot_data_dict],
-                        'avg_F1': [plot_data_dict[v]['avg_F1'] for v in vowel_order if v in plot_data_dict],
-                        'avg_F2': [plot_data_dict[v]['avg_F2'] for v in vowel_order if v in plot_data_dict],
-                        'count': [plot_data_dict[v]['count'] for v in vowel_order if v in plot_data_dict],
-                        'avg_intensity': [plot_data_dict[v]['avg_intensity'] for v in vowel_order if v in plot_data_dict],
-                        'avg_energy': [plot_data_dict[v]['avg_energy'] for v in vowel_order if v in plot_data_dict]
-                    })
-                    csv = df_vowel_count.to_csv(index=False).encode('utf-8-sig')
-                    st.download_button(
-                        label="Скачать данные графика в CSV",
-                        data=csv,
-                        file_name=f"{base_name}_vowel_count_data.csv",
-                        mime="text/csv"
-                    )
+                    if plot_data_dict:
+                        df_3d = pd.DataFrame({
+                            'vowel': list(plot_data_dict.keys()),
+                            'avg_F1': [plot_data_dict[v]['avg_F1'] for v in plot_data_dict],
+                            'avg_F2': [plot_data_dict[v]['avg_F2'] for v in plot_data_dict],
+                            'count': [plot_data_dict[v]['count'] for v in plot_data_dict],
+                            'avg_intensity': [plot_data_dict[v]['avg_intensity'] for v in plot_data_dict],
+                            'avg_energy': [plot_data_dict[v]['avg_energy'] for v in plot_data_dict]
+                        })
+                        csv_3d = df_3d.to_csv(index=False).encode('utf-8-sig')
+                        st.download_button("Скачать данные 3D-графика", csv_3d, f"{base_name}_vowel_count_data.csv", "text/csv")
 
-                html_path_vowel_count = os.path.join(OUTPUT_DIR, f"{base_name}_vowel_count_3d_precise.html")
-                fig_vowel_count.write_html(html_path_vowel_count)
-
-                # Построение гистограммы
+                # 2. Гистограмма
                 st.subheader("Гистограмма количества гласных")
                 hist_fig = plot_vowel_histogram(vowel_data)
                 if hist_fig:
                     st.plotly_chart(hist_fig, use_container_width=True)
+                    hist_fig.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_vowel_histogram.html"))
 
-                html_path_histogram = os.path.join(OUTPUT_DIR, f"{base_name}_vowel_histogram.html")
-                hist_fig.write_html(html_path_histogram)
-                # === РАДИАЛЬНАЯ ЗВЕЗДА С БЫСТРЫМ УПРАВЛЕНИЕМ ===
-              st.subheader("Радиальная «Звезда гласных» с нормами")
+                # 3. Радиальная звезда с нормами
+                st.subheader("Радиальная «Звезда гласных» с нормами")
                 gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="radar_gender_select")
 
-                if "radar_fig_base" not in st.session_state or st.session_state.get("last_radar_gender") != gender:
+                if ("radar_fig_base" not in st.session_state or 
+                    st.session_state.get("last_radar_gender") != gender):
                     with st.spinner(f"Построение звезды для {gender}..."):
                         st.session_state.radar_fig_base = get_radar_cached(vowel_data, audio_path, gender)
                         st.session_state.last_radar_gender = gender
 
                 fig_radar = st.session_state.radar_fig_base
+                if fig_radar:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("Показать всё", key="radar_show"):
+                            fig_radar.update_traces(visible=True)
+                    with col2:
+                        if st.button("Скрыть всё", key="radar_hide"):
+                            fig_radar.update_traces(visible="legendonly")
 
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("Показать всё", key="radar_show_all"):
-                        fig_radar.update_traces(visible=True)
-                with col2:
-                    if st.button("Скрыть всё", key="radar_hide_all"):
-                        fig_radar.update_traces(visible="legendonly")
+                    st.plotly_chart(fig_radar, use_container_width=True, config={'displayModeBar': True})
+                    csv_radar = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
+                    st.download_button("Скачать данные (звезда)", csv_radar, f"{base_name}_radar_data.csv", "text/csv")
+                    fig_radar.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_radar_star.html"))
 
-                st.plotly_chart(fig_radar, use_container_width=True, config={'displayModeBar': True})
-
-                # Скачивание
-                csv = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
-                st.download_button("Скачать данные (звезда)", csv, f"{base_name}_radar_data.csv", "text/csv")
-                fig_radar.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_radar_star.html"))
-
-                # === НОВЫЙ ГРАФИК 4: K-MEANS КЛАСТЕРИЗАЦИЯ ===
-                               # === K-MEANS С БЫСТРЫМ УПРАВЛЕНИЕМ ===
-               # === K-MEANS — БЕЗ ЛАГОВ (cache_data + session_state) ===
-                  # === K-MEANS — МГНОВЕННО ===
-                # === K-MEANS — МГНОВЕННО (как старый 3D) ===
-                                # === K-MEANS — МГНОВЕННО ===
+                # 4. K-means кластеризация
                 st.subheader("F1–F2 карта с автоматической кластеризацией (k-means)")
-
                 if "kmeans_fig_base" not in st.session_state:
                     with st.spinner("Кластеризация гласных..."):
                         st.session_state.kmeans_fig_base = get_kmeans_cached(vowel_data, audio_path)
 
                 fig_kmeans = st.session_state.kmeans_fig_base
+                if fig_kmeans:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("Показать всё", key="kmeans_show"):
+                            fig_kmeans.update_traces(visible=True)
+                    with col2:
+                        if st.button("Скрыть всё", key="kmeans_hide"):
+                            fig_kmeans.update_traces(visible="legendonly")
 
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("Показать всё", key="kmeans_show_all"):
-                        fig_kmeans.update_traces(visible=True)
-                with col2:
-                    if st.button("Скрыть всё", key="kmeans_hide_all"):
-                        fig_kmeans.update_traces(visible="legendonly")
-
-                st.plotly_chart(fig_kmeans, use_container_width=True, config={'displayModeBar': True})
-
-                # Скачивание
-                csv = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
-                st.download_button("Скачать данные (k-means)", csv, f"{base_name}_kmeans_data.csv", "text/csv")
-                fig_kmeans.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_kmeans_map.html"))
+                    st.plotly_chart(fig_kmeans, use_container_width=True, config={'displayModeBar': True})
+                    csv_kmeans = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
+                    st.download_button("Скачать данные (k-means)", csv_kmeans, f"{base_name}_kmeans_data.csv", "text/csv")
+                    fig_kmeans.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_kmeans_map.html"))
 
 if __name__ == "__main__":
     main()
