@@ -578,6 +578,75 @@ def main():
                     file_name=f"{base_name}_kmeans_clusters.csv",
                     mime="text/csv"
                 )
+def plot_kmeans_formant_map(vowel_data, audio_filename, n_clusters=6):
+    """F1–F2 карта с k-means кластеризацией + 95% эллипсы"""
+    df = pd.DataFrame(vowel_data)
+    if len(df) < n_clusters:
+        st.warning(f"Слишком мало точек ({len(df)}) для {n_clusters} кластеров. Уменьшаю до {len(df)}.")
+        n_clusters = max(1, len(df))
 
+    df_norm = normalize_lobanov(df, ['F1', 'F2'])
+    features = df_norm[['F1_z', 'F2_z']].values
+
+    from sklearn.cluster import KMeans
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    df_norm['cluster'] = kmeans.fit_predict(features)
+
+    fig = go.Figure()
+
+    colors = px.colors.qualitative.Plotly
+    for cluster in range(n_clusters):
+        cluster_df = df_norm[df_norm['cluster'] == cluster]
+        if len(cluster_df) == 0:
+            continue
+
+        # Основные точки
+        fig.add_trace(go.Scatter(
+            x=cluster_df['F1'],
+            y=cluster_df['F2'],
+            mode='markers',
+            name=f'Кластер {cluster+1} ({len(cluster_df)} шт.)',
+            marker=dict(color=colors[cluster % len(colors)], size=10, opacity=0.8),
+            text=cluster_df['vowel'],
+            hovertemplate='<b>%{text}</b><br>F1: %{x:.0f} Гц<br>F2: %{y:.0f} Гц<br>Длительность: %{customdata[0]:.3f} с<br>Тон: %{customdata[1]:.0f} Гц<extra></extra>',
+            customdata=cluster_df[['duration', 'mean_pitch']]
+        ))
+
+        # 95% эллипс доверия
+        if len(cluster_df) >= 3:
+            mean_x = cluster_df['F1'].mean()
+            mean_y = cluster_df['F2'].mean()
+            cov = np.cov(cluster_df['F1'], cluster_df['F2'])
+            try:
+                lambda_, v = np.linalg.eig(cov)
+                lambda_ = np.sqrt(lambda_)
+                angle = np.degrees(np.arctan2(v[1,0], v[0,0]))
+
+                # 95% доверительный эллипс
+                t = np.linspace(0, 2*np.pi, 100)
+                ellipse = np.array([mean_x + 1.96 * lambda_[0] * np.cos(t) * np.cos(angle) - 1.96 * lambda_[1] * np.sin(t) * np.sin(angle),
+                                    mean_y + 1.96 * lambda_[0] * np.cos(t) * np.sin(angle) + 1.96 * lambda_[1] * np.sin(t) * np.cos(angle)])
+
+                fig.add_trace(go.Scatter(
+                    x=ellipse[0], y=ellipse[1],
+                    mode='lines',
+                    line=dict(color=colors[cluster % len(colors)], width=2, dash='dash'),
+                    name=f'95% эллипс кластера {cluster+1}',
+                    showlegend=False
+                ))
+            except:
+                pass  # если ковариация вырожденная
+
+    fig.update_layout(
+        title=f'F1–F2 карта с k-means (k={n_clusters}) — {os.path.basename(audio_filename)}',
+        xaxis_title='F1 (Гц)',
+        yaxis_title='F2 (Гц)',
+        xaxis=dict(autorange="reversed"),
+        yaxis=dict(autorange="reversed"),
+        width=1000,
+        height=800,
+        legend=dict(y=0.99, x=0.01)
+    )
+    return fig
 if __name__ == "__main__":
     main()
