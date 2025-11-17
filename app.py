@@ -483,27 +483,13 @@ def plot_kmeans_formant_map(vowel_data, audio_filename, n_clusters=6):
     )
     return fig
 # === КЭШИРОВАННЫЕ ФУНКЦИИ (ВНЕ main!) ===
-                # === РАДИАЛЬНАЯ ЗВЕЗДА — МГНОВЕННО (как старый 3D) ===
-                st.subheader("Радиальная «Звезда гласных» с нормами")
-                gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="radar_gender_select")
+@st.cache_data(show_spinner=False)
+def get_radar_cached(_vowel_data, _audio_path, _gender):
+    return plot_radar_vowel_star(_vowel_data, _audio_path, gender=_gender)
 
-                # Кэшируем только один раз при смене пола
-                if "radar_fig_base" not in st.session_state or st.session_state.get("last_radar_gender") != gender:
-                    with st.spinner(f"Построение звезды для {gender}..."):
-                        st.session_state.radar_fig_base = get_radar_cached(vowel_data, audio_path, gender)
-                        st.session_state.last_radar_gender = gender
-
-                fig_radar = st.session_state.radar_fig_base
-
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("Показать всё", key="radar_show"):
-                        fig_radar.update_traces(visible=True)
-                with col2:
-                    if st.button("Скрыть всё", key="radar_hide"):
-                        fig_radar.update_traces(visible="legendonly")
-
-                st.plotly_chart(fig_radar, use_container_width=True, config={'displayModeBar': True})
+@st.cache_data(show_spinner=False)
+def get_kmeans_cached(_vowel_data, _audio_path):
+    return plot_kmeans_formant_map(_vowel_data, _audio_path, n_clusters=6)
 def main():
     st.set_page_config(layout="wide")  # Установка широкого макета страницы
     st.title("Анализ и визуализация гласных в аудио")
@@ -578,41 +564,37 @@ def main():
                 html_path_histogram = os.path.join(OUTPUT_DIR, f"{base_name}_vowel_histogram.html")
                 hist_fig.write_html(html_path_histogram)
                 # === РАДИАЛЬНАЯ ЗВЕЗДА С БЫСТРЫМ УПРАВЛЕНИЕМ ===
-                st.subheader("Радиальная «Звезда гласных» с нормами")
+              st.subheader("Радиальная «Звезда гласных» с нормами")
                 gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="radar_gender_select")
 
-                cache_key = f"radar_fig_{gender}"
-                if cache_key not in st.session_state:
+                if "radar_fig_base" not in st.session_state or st.session_state.get("last_radar_gender") != gender:
                     with st.spinner(f"Построение звезды для {gender}..."):
-                        st.session_state[cache_key] = get_radar_cached(vowel_data, audio_path, gender)
+                        st.session_state.radar_fig_base = get_radar_cached(vowel_data, audio_path, gender)
+                        st.session_state.last_radar_gender = gender
 
-                fig_radar = st.session_state[cache_key]
+                fig_radar = st.session_state.radar_fig_base
 
-                if not fig_radar or len(fig_radar.data) == 0:
-                    st.warning("Нет данных для звезды.")
-                else:
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.button("Показать всё", key=f"radar_show_{gender}"):
-                            fig_radar.update_traces(visible=True)
-                            st.session_state[cache_key] = fig_radar
-                    with col2:
-                        if st.button("Скрыть всё", key=f"radar_hide_{gender}"):
-                            fig_radar.update_traces(visible='legendonly')
-                            st.session_state[cache_key] = fig_radar
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Показать всё", key="radar_show_all"):
+                        fig_radar.update_traces(visible=True)
+                with col2:
+                    if st.button("Скрыть всё", key="radar_hide_all"):
+                        fig_radar.update_traces(visible="legendonly")
 
-                    st.plotly_chart(fig_radar, use_container_width=True, config={'displayModeBar': True})
+                st.plotly_chart(fig_radar, use_container_width=True, config={'displayModeBar': True})
 
-                    radar_csv = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
-                    st.download_button("Скачать данные (звезда)", radar_csv, f"{base_name}_radar_data.csv", "text/csv")
-                    radar_html = os.path.join(OUTPUT_DIR, f"{base_name}_radar_star.html")
-                    fig_radar.write_html(radar_html)
+                # Скачивание
+                csv = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
+                st.download_button("Скачать данные (звезда)", csv, f"{base_name}_radar_data.csv", "text/csv")
+                fig_radar.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_radar_star.html"))
 
                 # === НОВЫЙ ГРАФИК 4: K-MEANS КЛАСТЕРИЗАЦИЯ ===
                                # === K-MEANS С БЫСТРЫМ УПРАВЛЕНИЕМ ===
                # === K-MEANS — БЕЗ ЛАГОВ (cache_data + session_state) ===
                   # === K-MEANS — МГНОВЕННО ===
                 # === K-MEANS — МГНОВЕННО (как старый 3D) ===
+                                # === K-MEANS — МГНОВЕННО ===
                 st.subheader("F1–F2 карта с автоматической кластеризацией (k-means)")
 
                 if "kmeans_fig_base" not in st.session_state:
@@ -623,17 +605,18 @@ def main():
 
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("Показать всё", key="kmeans_show"):
+                    if st.button("Показать всё", key="kmeans_show_all"):
                         fig_kmeans.update_traces(visible=True)
                 with col2:
-                    if st.button("Скрыть всё", key="kmeans_hide"):
+                    if st.button("Скрыть всё", key="kmeans_hide_all"):
                         fig_kmeans.update_traces(visible="legendonly")
 
                 st.plotly_chart(fig_kmeans, use_container_width=True, config={'displayModeBar': True})
-                    kmeans_csv = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
-                    st.download_button("Скачать данные (k-means)", kmeans_csv, f"{base_name}_kmeans_data.csv", "text/csv")
-                    kmeans_html = os.path.join(OUTPUT_DIR, f"{base_name}_kmeans_map.html")
-                    fig_kmeans.write_html(kmeans_html)
+
+                # Скачивание
+                csv = pd.DataFrame(vowel_data).to_csv(index=False).encode('utf-8-sig')
+                st.download_button("Скачать данные (k-means)", csv, f"{base_name}_kmeans_data.csv", "text/csv")
+                fig_kmeans.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_kmeans_map.html"))
 
 if __name__ == "__main__":
     main()
