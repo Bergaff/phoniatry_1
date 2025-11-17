@@ -506,10 +506,16 @@ def main():
 
             if vowel_data:
                 base_name = os.path.splitext(os.path.basename(audio_path))[0]
+
+                # Сохраняем сырые данные
                 pd.DataFrame(vowel_data).to_csv(
                     os.path.join(OUTPUT_DIR, f'{base_name}_vowel_formants_params_raw.csv'),
-                    index=False, float_format='%.4f', encoding='utf-8-sig'
-                               # ==== КНОПКА СКАЧИВАНИЯ (всё в одном месте и безопасно) ====
+                    index=False,
+                    float_format='%.4f',
+                    encoding='utf-8-sig'          # ← запятая была нужна здесь!
+                )  # ← закрываем вызов to_csv правильно
+
+                # Кнопка скачивания ВСЕХ сырых данных
                 csv_all = pd.DataFrame(vowel_data).to_csv(index=False, encoding='utf-8-sig')
                 st.download_button(
                     label="Скачать ВСЕ сырые данные гласных (CSV)",
@@ -517,7 +523,8 @@ def main():
                     file_name=f"{base_name}_all_vowel_data.csv",
                     mime="text/csv"
                 )
-                )
+
+                # Сохраняем обработанные данные (с пиками и т.д.)
                 save_phoneme_data(vowel_data, phoneme_log_data, audio_path)
 
                 # 1. 3D количество гласных
