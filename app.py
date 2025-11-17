@@ -348,24 +348,34 @@ def get_russian_norms(gender='female'):
     return norms
 
 def plot_radar_vowel_star(vowel_data, audio_filename, gender='female'):
-    """Радиальная звезда гласных с нормами — ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+    """Радиальная звезда гласных — возвращает график + DataFrame с данными"""
     df = pd.DataFrame(vowel_data)
     if df.empty:
         st.error("Нет данных для звезды гласных.")
-        return None
+        return None, None
 
     vowel_order = ['и', 'ы', 'у', 'о', 'а', 'э']
     norms = get_russian_norms(gender)
 
     # Средние значения по каждой гласной
     agg = df.groupby('vowel').agg({
-        'F1': 'mean',
-        'F2': 'mean',
-        'duration': 'mean',
-        'mean_pitch': 'mean',
-        'mean_intensity': 'mean',
-        'total_energy': 'mean'
+        'F1': 'mean', 'F2': 'mean', 'duration': 'mean',
+        'mean_pitch': 'mean', 'mean_intensity': 'mean', 'total_energy': 'mean'
     }).reindex(vowel_order)
+
+    # Добавляем нормы и отклонения — это и будет в CSV
+    result_df = agg.copy()
+    result_df['norm_F1'] = result_df.index.map(lambda v: norms[v]['F1'])
+    result_df['norm_F2'] = result_df.index.map(lambda v: norms[v]['F2'])
+    result_df['norm_duration'] = result_df.index.map(lambda v: norms[v]['duration'])
+    result_df['norm_F0'] = result_df.index.map(lambda v: norms[v]['F0'])
+
+    result_df['dev_F1_%'] = ((result_df['F1'] - result_df['norm_F1']) / result_df['norm_F1'] * 100).round(2)
+    result_df['dev_F2_%'] = ((result_df['F2'] - result_df['norm_F2']) / result_df['norm_F2'] * 100).round(2)
+    result_df['dev_duration_%'] = ((result_df['duration'] - result_df['norm_duration']) / result_df['norm_duration'] * 100).round(2)
+    result_df['dev_pitch_semitones'] = (12 * np.log2(result_df['mean_pitch'] / result_df['norm_F0'])).round(2)
+    result_df['dev_intensity_dB'] = (result_df['mean_intensity'] - 70).round(2)
+    result_df['dev_energy_%'] = ((result_df['total_energy'] - 0.005) / 0.005 * 100).round(2)
 
     fig = go.Figure()
 
@@ -373,18 +383,16 @@ def plot_radar_vowel_star(vowel_data, audio_filename, gender='female'):
         if v not in agg.index or pd.isna(agg.loc[v, 'F1']):
             continue
 
-        p = agg.loc[v]  # данные пациента для этой гласной
-        n = norms[v]    # норма для этой гласной
+        p = agg.loc[v]
+        n = norms[v]
 
-        # Отклонения
         dev_F1 = (p['F1'] - n['F1']) / n['F1'] * 100
         dev_F2 = (p['F2'] - n['F2']) / n['F2'] * 100
         dev_dur = (p['duration'] - n['duration']) / n['duration'] * 100
-        dev_pitch = 12 * np.log2(p['mean_pitch'] / n['F0'])  # семитоны
-        dev_int = p['mean_intensity'] - 70  # от условной нормы 70 дБ
+        dev_pitch = 12 * np.log2(p['mean_pitch'] / n['F0'])
+        dev_int = p['mean_intensity'] - 70
         dev_energy = (p['total_energy'] - 0.005) / 0.005 * 100
 
-        # Обрезаем выбросы
         values = [
             max(min(dev_F1, 100), -100),
             max(min(dev_F2, 100), -100),
@@ -394,7 +402,6 @@ def plot_radar_vowel_star(vowel_data, audio_filename, gender='female'):
             max(min(dev_energy, 200), -200)
         ]
 
-        # Пациент
         fig.add_trace(go.Scatterpolar(
             r=values + [values[0]],
             theta=['F1 %', 'F2 %', 'Длительность %', 'Тон (семитоны)', 'Интенсивность (от 70 дБ)', 'Энергия %', 'F1 %'],
@@ -404,9 +411,8 @@ def plot_radar_vowel_star(vowel_data, audio_filename, gender='female'):
             opacity=0.8
         ))
 
-        # Норма (нулевая линия)
         fig.add_trace(go.Scatterpolar(
-            r=[0, 0, 0, 0, 0, 0, 0],
+            r=[0]*7,
             theta=['F1 %', 'F2 %', 'Длительность %', 'Тон (семитоны)', 'Интенсивность (от 70 дБ)', 'Энергия %', 'F1 %'],
             fill='toself',
             name=f'{v} (норма)',
@@ -416,81 +422,14 @@ def plot_radar_vowel_star(vowel_data, audio_filename, gender='female'):
         ))
 
     fig.update_layout(
-        polar=dict(
-            radialaxis=dict(visible=True, range=[-100, 100], tickmode='linear', dtick=25),
-            angularaxis=dict(direction="clockwise")
-        ),
+        polar=dict(radialaxis=dict(visible=True, range=[-100, 100], dtick=25)),
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         title=f'Звезда гласных — {os.path.basename(audio_filename)} ({gender})',
-        width=1000,
-        height=800
-    )
-    return fig
-
-def plot_kmeans_formant_map(vowel_data, audio_filename, n_clusters=6):
-    """F1–F2 карта с k-means + эллипсы"""
-    df = pd.DataFrame(vowel_data)
-    if len(df) < n_clusters:
-        st.warning("Слишком мало данных для кластеризации.")
-        return None
-
-    df_norm = normalize_lobanov(df, ['F1', 'F2'])
-    features = df_norm[['F1_z', 'F2_z']].values
-
-    from sklearn.cluster import KMeans
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-    df_norm['cluster'] = kmeans.fit_predict(features)
-
-    fig = go.Figure()
-
-    colors = px.colors.qualitative.Plotly
-    for cluster in range(n_clusters):
-        cluster_df = df_norm[df_norm['cluster'] == cluster]
-        if len(cluster_df) == 0: continue
-
-        # Точки
-        fig.add_trace(go.Scatter(
-            x=cluster_df['F1'],
-            y=cluster_df['F2'],
-            mode='markers',
-            name=f'Кластер {cluster+1} ({cluster_df["vowel"].iloc[0]})',
-            marker=dict(color=colors[cluster % len(colors)], size=10),
-            text=cluster_df['vowel'],
-            hovertemplate='<b>%{text}</b><br>F1: %{x:.0f} Гц<br>F2: %{y:.0f} Гц'
-        ))
-
-        # Эллипс (95% доверие)
-        if len(cluster_df) > 3:
-            mean_x = cluster_df['F1'].mean()
-            mean_y = cluster_df['F2'].mean()
-            cov = np.cov(cluster_df['F1'], cluster_df['F2'])
-            try:
-                from scipy.stats import chi2
-                lambda_, v = np.linalg.eig(cov)
-                lambda_ = np.sqrt(lambda_)
-                angle = np.degrees(np.arctan2(v[1,0], v[0,0]))
-                width, height = 2 * 1.96 * lambda_  # 95%
-                ell = go.Scatter(
-                    x=[mean_x + width * np.cos(np.linspace(0, 2*np.pi, 100)) * np.cos(angle) - height * np.sin(np.linspace(0, 2*np.pi, 100)) * np.sin(angle)],
-                    y=[mean_y + width * np.cos(np.linspace(0, 2*np.pi, 100)) * np.sin(angle) + height * np.sin(np.linspace(0, 2*np.pi, 100)) * np.cos(angle)],
-                    mode='lines',
-                    line=dict(color=colors[cluster % len(colors)], width=2, dash='dash'),
-                    name=f'95% эллипс {cluster+1}',
-                    showlegend=False
-                )
-                fig.add_trace(ell)
-            except:
-                pass
-
-    fig.update_layout(
-        title=f'F1–F2 карта с кластеризацией (k={n_clusters}) — {os.path.basename(audio_filename)}',
-        xaxis_title='F1 (Гц)', yaxis_title='F2 (Гц)',
-        xaxis=dict(autorange="reversed"),
-        yaxis=dict(autorange="reversed"),
         width=1000, height=800
     )
-    return fig
+
+    return fig, result_df  # ← ВОЗВРАЩАЕМ И ГРАФИК, И ДАННЫЕ!
 
 def main():
     st.set_page_config(layout="wide")
@@ -587,19 +526,30 @@ def main():
                 # ==================================================================
                 # 3. Радиальная звезда
                 # ==================================================================
-                st.subheader("Радиальная «Звезда гласных» с нормами")
-                gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="gender_sel")
+              st.subheader("Радиальная «Звезда гласных» с нормами")
+              gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="gender_sel")
 
-                if "fig_radar" not in st.session_state or st.session_state.get("last_gender") != gender:
-                    with st.spinner("Построение радиальной звезды..."):
-                        st.session_state.fig_radar = plot_radar_vowel_star(vowel_data, audio_path, gender=gender)
-                        st.session_state.last_gender = gender
+                # Кэшируем и график, и данные для CSV
+                if "radar_data" not in st.session_state or st.session_state.get("last_gender_radar") != gender:
+                    with st.spinner("Построение радиальной звезды и подготовка данных..."):
+                        fig_radar, radar_df = plot_radar_vowel_star(vowel_data, audio_path, gender=gender)
+                        st.session_state.fig_radar = fig_radar
+                        st.session_state.radar_df = radar_df
+                        st.session_state.last_gender_radar = gender
 
                 fig_radar = st.session_state.fig_radar
                 st.plotly_chart(fig_radar, use_container_width=True)
                 fig_radar.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_radar_star.html"))
 
- 
+                # ВОЗВРАЩАЕМ КНОПКУ СКАЧИВАНИЯ!
+                radar_df = st.session_state.radar_df
+                csv_radar = radar_df.to_csv(index=True, encoding='utf-8-sig').encode('utf-8-sig')
+                st.download_button(
+                    label="Скачать данные звезды гласных (отклонения %, нормы, средние)",
+                    data=csv_radar,
+                    file_name=f"{base_name}_vowel_star_detailed.csv",
+                    mime="text/csv"
+                )
                 st.markdown("---")
 
                 # ==================================================================
