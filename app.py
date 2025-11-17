@@ -368,29 +368,46 @@ def plot_radar_vowel_star(vowel_data, audio_filename, gender='female'):
     norm_vals = []
     categories = []
 
+    patient_vals = []
+    norm_vals = []
+    categories = []
+
+    # Считаем средние по каждой гласной отдельно
+    agg = df.groupby('vowel').agg({
+        'F1': 'mean',
+        'F2': 'mean', 
+        'duration': 'mean',
+        'mean_pitch': 'mean',
+        'mean_intensity': 'mean',
+        'total_energy': 'mean'
+    }).reindex(vowel_order)
+
     for v in vowel_order:
-        if v in agg.index and v in norms:
-            n = norms[v]
-            p = agg.loc[v]
-            categories.append(v)
+        if v not in agg.index or v not in norms:
+            continue
+            
+        p = agg.loc[v]  # ← средние значения именно этой гласной
+        n = norms[v]    # ← норма для этой гласной
 
-            # Отклонения в %
-            dev_F1 = (p['F1'] - n['F1']) / n['F1'] * 100
-            dev_F2 = (p['F2'] - n['F2']) / n['F2'] * 100
-            dev_dur = (p['duration'] - n['duration']) / n['duration'] * 100
-            dev_pitch = 12 * np.log2(p['mean_pitch'] / n['F0'])  # семитонов
-            dev_int = p['mean_intensity'] - 70  # условная норма 70 дБ
-            dev_energy = (p['total_energy'] - 0.005) / 0.005 * 100  # условно
+        categories.append(v)
 
-            patient_vals.append([
-                max(min(dev_F1, 100), -100),
-                max(min(dev_F2, 100), -100),
-                max(min(dev_dur, 100), -100),
-                max(min(dev_pitch, 12), -12),
-                max(min(dev_int, 20), -20),
-                max(min(dev_energy, 200), -200)
-            ])
-            norm_vals.append([0, 0, 0, 0, 0, 0])
+        # Отклонения в %
+        dev_F1 = (p['F1'] - n['F1']) / n['F1'] * 100
+        dev_F2 = (p['F2'] - n['F2']) / n['F2'] * 100
+        dev_dur = (p['duration'] - n['duration']) / n['duration'] * 100
+        dev_pitch = 12 * np.log2(p['mean_pitch'] / n['F0'])  # в семитонах
+        dev_int = p['mean_intensity'] - 70  # условная норма 70 дБ
+        dev_energy = (p['total_energy'] - 0.005) / 0.005 * 100
+
+        patient_vals.append([
+            max(min(dev_F1, 100), -100),
+            max(min(dev_F2, 100), -100),
+            max(min(dev_dur, 100), -100),
+            max(min(dev_pitch, 12), -12),
+            max(min(dev_int, 20), -20),
+            max(min(dev_energy, 200), -200)
+        ])
+        norm_vals.append([0, 0, 0, 0, 0, 0])
 
     # Plotly Radar
     fig = go.Figure()
@@ -516,7 +533,7 @@ def main():
                 save_phoneme_data(vowel_data, phoneme_log_data, audio_path)
 
                 # Кнопка скачивания ВСЕХ сырых данных (общая)
-                csv_all = pd.DataFrame(vowel_data).to_csv(index=False, encoding='utf-8-sig')
+                ccsv_all = pd.DataFrame(vowel_data).to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
                 st.download_button(
                     label="Скачать ВСЕ сырые данные гласных (CSV)",
                     data=csv_all,
@@ -547,7 +564,7 @@ def main():
                             }
                             for v in ['и', 'ы', 'у', 'о', 'а', 'э'] if v in plot_data_dict
                         ])
-                        csv_count = df_count.to_csv(index=False, encoding='utf-8-sig')
+                        csv_count = df_count.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
                         st.download_button(
                             label="Скачать данные 3D-карты количества (CSV)",
                             data=csv_count,
@@ -567,7 +584,7 @@ def main():
 
                     df_hist = pd.DataFrame(vowel_data)['vowel'].value_counts().reset_index()
                     df_hist.columns = ['vowel', 'count']
-                    csv_hist = df_hist.to_csv(index=False, encoding='utf-8-sig')
+                    csv_hist = df_hist.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
                     st.download_button(
                         label="Скачать данные гистограммы (CSV)",
                         data=csv_hist,
@@ -601,7 +618,7 @@ def main():
                 df_agg['norm_F2'] = df_agg.index.map(lambda v: norms.get(v, {}).get('F2', np.nan))
                 df_agg['dev_F1_%'] = ((df_agg['F1'] - df_agg['norm_F1']) / df_agg['norm_F1'] * 100).round(2)
                 df_agg['dev_F2_%'] = ((df_agg['F2'] - df_agg['norm_F2']) / df_agg['norm_F2'] * 100).round(2)
-                csv_radar = df_agg.to_csv(encoding='utf-8-sig')
+                csv_radar = df_agg.to_csv(encoding='utf-8-sig').encode('utf-8-sig')
                 st.download_button(
                     label="Скачать данные звезды гласных (CSV)",
                     data=csv_radar,
@@ -629,7 +646,7 @@ def main():
                 kmeans = KMeans(n_clusters=6, random_state=42, n_init=10)
                 df_norm['cluster'] = kmeans.fit_predict(features)
                 df_kmeans = df_norm[['vowel', 'F1', 'F2', 'duration', 'mean_pitch', 'cluster']].round(4)
-                csv_kmeans = df_kmeans.to_csv(index=False, encoding='utf-8-sig')
+                csv_kmeans = df_kmeans.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
                 st.download_button(
                     label="Скачать данные k-means кластеров (CSV)",
                     data=csv_kmeans,
