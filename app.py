@@ -509,6 +509,14 @@ def main():
                 pd.DataFrame(vowel_data).to_csv(
                     os.path.join(OUTPUT_DIR, f'{base_name}_vowel_formants_params_raw.csv'),
                     index=False, float_format='%.4f', encoding='utf-8-sig'
+                               # ==== КНОПКА СКАЧИВАНИЯ (всё в одном месте и безопасно) ====
+                csv_all = pd.DataFrame(vowel_data).to_csv(index=False, encoding='utf-8-sig')
+                st.download_button(
+                    label="Скачать ВСЕ сырые данные гласных (CSV)",
+                    data=csv_all,
+                    file_name=f"{base_name}_all_vowel_data.csv",
+                    mime="text/csv"
+                )
                 )
                 save_phoneme_data(vowel_data, phoneme_log_data, audio_path)
 
