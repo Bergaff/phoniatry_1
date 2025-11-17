@@ -508,15 +508,14 @@ def main():
             if vowel_data:
                 base_name = os.path.splitext(os.path.basename(audio_path))[0]
 
-                # Сохраняем сырые данные
+                # === Сохранение сырых и обработанных данных ===
                 pd.DataFrame(vowel_data).to_csv(
                     os.path.join(OUTPUT_DIR, f'{base_name}_vowel_formants_params_raw.csv'),
-                    index=False,
-                    float_format='%.4f',
-                    encoding='utf-8-sig'          # ← запятая была нужна здесь!
-                )  # ← закрываем вызов to_csv правильно
+                    index=False, float_format='%.4f', encoding='utf-8-sig'
+                )
+                save_phoneme_data(vowel_data, phoneme_log_data, audio_path)
 
-                # Кнопка скачивания ВСЕХ сырых данных
+                # Кнопка скачивания ВСЕХ сырых данных (общая)
                 csv_all = pd.DataFrame(vowel_data).to_csv(index=False, encoding='utf-8-sig')
                 st.download_button(
                     label="Скачать ВСЕ сырые данные гласных (CSV)",
@@ -524,23 +523,62 @@ def main():
                     file_name=f"{base_name}_all_vowel_data.csv",
                     mime="text/csv"
                 )
+                st.markdown("---")
 
-                # Сохраняем обработанные данные (с пиками и т.д.)
-                save_phoneme_data(vowel_data, phoneme_log_data, audio_path)
-
-                # 1. 3D количество гласных
+                # ==================================================================
+                # 1. 3D-карта количества гласных
+                # ==================================================================
                 st.subheader("3D-карта количества гласных (и-ы-у-о-а-э-и)")
-                fig_3d_count, _ = plot_3d_vowel_count(vowel_data, audio_path)
+                fig_3d_count, plot_data_dict = plot_3d_vowel_count(vowel_data, audio_path)
                 if fig_3d_count:
                     st.plotly_chart(fig_3d_count, use_container_width=True)
                     fig_3d_count.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_vowel_count_3d.html"))
 
+                    # CSV для 3D количества
+                    if plot_data_dict:
+                        df_count = pd.DataFrame([
+                            {
+                                'vowel': v,
+                                'count': plot_data_dict[v]['count'],
+                                'avg_F1': plot_data_dict[v]['avg_F1'],
+                                'avg_F2': plot_data_dict[v]['avg_F2'],
+                                'avg_intensity_dB': plot_data_dict[v]['avg_intensity'],
+                                'avg_energy': plot_data_dict[v]['avg_energy']
+                            }
+                            for v in ['и', 'ы', 'у', 'о', 'а', 'э'] if v in plot_data_dict
+                        ])
+                        csv_count = df_count.to_csv(index=False, encoding='utf-8-sig')
+                        st.download_button(
+                            label="Скачать данные 3D-карты количества (CSV)",
+                            data=csv_count,
+                            file_name=f"{base_name}_vowel_count_summary.csv",
+                            mime="text/csv"
+                        )
+                st.markdown("---")
+
+                # ==================================================================
                 # 2. Гистограмма
+                # ==================================================================
                 st.subheader("Гистограмма количества гласных")
                 hist_fig = plot_vowel_histogram(vowel_data)
                 if hist_fig:
                     st.plotly_chart(hist_fig, use_container_width=True)
-                                  # 3. Радиальная «Звезда гласных»
+                    hist_fig.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_vowel_histogram.html"))
+
+                    df_hist = pd.DataFrame(vowel_data)['vowel'].value_counts().reset_index()
+                    df_hist.columns = ['vowel', 'count']
+                    csv_hist = df_hist.to_csv(index=False, encoding='utf-8-sig')
+                    st.download_button(
+                        label="Скачать данные гистограммы (CSV)",
+                        data=csv_hist,
+                        file_name=f"{base_name}_vowel_histogram.csv",
+                        mime="text/csv"
+                    )
+                st.markdown("---")
+
+                # ==================================================================
+                # 3. Радиальная звезда
+                # ==================================================================
                 st.subheader("Радиальная «Звезда гласных» с нормами")
                 gender = st.selectbox("Пол пациента", ["женщина", "мужчина"], key="gender_sel")
 
@@ -553,14 +591,51 @@ def main():
                 st.plotly_chart(fig_radar, use_container_width=True)
                 fig_radar.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_radar_star.html"))
 
+                # CSV для звезды — средние значения + отклонения от нормы
+                df_agg = pd.DataFrame(vowel_data).groupby('vowel').agg({
+                    'F1': 'mean', 'F2': 'mean', 'duration': 'mean',
+                    'mean_pitch': 'mean', 'mean_intensity': 'mean', 'total_energy': 'mean'
+                }).round(4)
+                norms = get_russian_norms(gender)
+                df_agg['norm_F1'] = df_agg.index.map(lambda v: norms.get(v, {}).get('F1', np.nan))
+                df_agg['norm_F2'] = df_agg.index.map(lambda v: norms.get(v, {}).get('F2', np.nan))
+                df_agg['dev_F1_%'] = ((df_agg['F1'] - df_agg['norm_F1']) / df_agg['norm_F1'] * 100).round(2)
+                df_agg['dev_F2_%'] = ((df_agg['F2'] - df_agg['norm_F2']) / df_agg['norm_F2'] * 100).round(2)
+                csv_radar = df_agg.to_csv(encoding='utf-8-sig')
+                st.download_button(
+                    label="Скачать данные звезды гласных (CSV)",
+                    data=csv_radar,
+                    file_name=f"{base_name}_vowel_star_data.csv",
+                    mime="text/csv"
+                )
+                st.markdown("---")
+
+                # ==================================================================
                 # 4. K-means карта
+                # ==================================================================
                 st.subheader("F1–F2 карта с k-means кластеризацией")
                 if "fig_kmeans" not in st.session_state:
                     with st.spinner("Выполняется кластеризация..."):
                         st.session_state.fig_kmeans = plot_kmeans_formant_map(vowel_data, audio_path, n_clusters=6)
 
-                st.plotly_chart(st.session_state.fig_kmeans, use_container_width=True)
-                st.session_state.fig_kmeans.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_kmeans_map.html"))
-                
+                fig_kmeans = st.session_state.fig_kmeans
+                st.plotly_chart(fig_kmeans, use_container_width=True)
+                fig_kmeans.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_kmeans_map.html"))
+
+                # CSV для k-means — все точки с меткой кластера
+                df_norm = normalize_lobanov(pd.DataFrame(vowel_data), ['F1', 'F2'])
+                features = df_norm[['F1_z', 'F2_z']].values
+                from sklearn.cluster import KMeans
+                kmeans = KMeans(n_clusters=6, random_state=42, n_init=10)
+                df_norm['cluster'] = kmeans.fit_predict(features)
+                df_kmeans = df_norm[['vowel', 'F1', 'F2', 'duration', 'mean_pitch', 'cluster']].round(4)
+                csv_kmeans = df_kmeans.to_csv(index=False, encoding='utf-8-sig')
+                st.download_button(
+                    label="Скачать данные k-means кластеров (CSV)",
+                    data=csv_kmeans,
+                    file_name=f"{base_name}_kmeans_clusters.csv",
+                    mime="text/csv"
+                )
+
 if __name__ == "__main__":
     main()
