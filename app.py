@@ -639,7 +639,7 @@ def plot_kmeans_formant_map(vowel_data, audio_filename, n_clusters=6):
             except:
                 pass  # если матрица ковариации вырожденная
 
-    fig.update_layout(
+fig.update_layout(
         title=f'F1–F2 карта гласных с k-means (k={n_clusters}) — {os.path.basename(audio_filename)}',
         xaxis_title='F1 (Гц)',
         yaxis_title='F2 (Гц)',
@@ -650,8 +650,14 @@ def plot_kmeans_formant_map(vowel_data, audio_filename, n_clusters=6):
         legend=dict(y=0.99, x=0.01)
     )
     return fig
-    @st.cache_data(show_spinner="K-means кластеризация и построение карты...")
+# ← ЗАКРЫЛИ ФУНКЦИЮ plot_kmeans_formant_map
+
+
+# ← А ТЕПЕРЬ СНАРУЖИ, НА ТОМ ЖЕ УРОВНЕ ОТСТУПА, ЧТО И ДРУГИЕ ФУНКЦИИ:
+@st.cache_data(show_spinner="K-means кластеризация и построение карты...")
 def get_kmeans_plot(vowel_data, audio_filename):
     return plot_kmeans_formant_map(vowel_data, audio_filename, n_clusters=6)
+
+
 if __name__ == "__main__":
     main()
