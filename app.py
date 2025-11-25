@@ -604,7 +604,7 @@ def plot_kmeans_formant_map(vowel_data, audio_filename, n_clusters=6):
             continue
 
         # Точки кластера
-        fig.add_trace(go.Scatter(
+        fig.add_Trace(go.Scatter(
             x=cluster_df['F1'],
             y=cluster_df['F2'],
             mode='markers',
@@ -629,7 +629,7 @@ def plot_kmeans_formant_map(vowel_data, audio_filename, n_clusters=6):
                 ellipse_x = mean_x + 1.96 * lambda_[0] * np.cos(t) * np.cos(angle) - 1.96 * lambda_[1] * np.sin(t) * np.sin(angle)
                 ellipse_y = mean_y + 1.96 * lambda_[0] * np.cos(t) * np.sin(angle) + 1.96 * lambda_[1] * np.sin(t) * np.cos(angle)
 
-                fig.add_trace(go.Scatter(
+                fig.add_Trace(go.Scatter(
                     x=ellipse_x, y=ellipse_y,
                     mode='lines',
                     line=dict(color=colors[cluster % len(colors)], width=2, dash='dash'),
@@ -637,9 +637,9 @@ def plot_kmeans_formant_map(vowel_data, audio_filename, n_clusters=6):
                     showlegend=False
                 ))
             except:
-                pass  # если матрица ковариации вырожденная
+                pass
 
-fig.update_layout(
+    fig.update_layout(
         title=f'F1–F2 карта гласных с k-means (k={n_clusters}) — {os.path.basename(audio_filename)}',
         xaxis_title='F1 (Гц)',
         yaxis_title='F2 (Гц)',
@@ -650,10 +650,9 @@ fig.update_layout(
         legend=dict(y=0.99, x=0.01)
     )
     return fig
-# ← ЗАКРЫЛИ ФУНКЦИЮ plot_kmeans_formant_map
 
 
-# ← А ТЕПЕРЬ СНАРУЖИ, НА ТОМ ЖЕ УРОВНЕ ОТСТУПА, ЧТО И ДРУГИЕ ФУНКЦИИ:
+# КЭШИРОВАННАЯ ОБОЛОЧКА — ВНЕ ВСЕХ ФУНКЦИЙ!
 @st.cache_data(show_spinner="K-means кластеризация и построение карты...")
 def get_kmeans_plot(vowel_data, audio_filename):
     return plot_kmeans_formant_map(vowel_data, audio_filename, n_clusters=6)
