@@ -604,7 +604,7 @@ def plot_kmeans_formant_map(vowel_data, audio_filename, n_clusters=6):
             continue
 
         # Точки кластера
-        fig.add_Trace(go.Scatter(
+        fig.add_trace(go.Scatter(
             x=cluster_df['F1'],
             y=cluster_df['F2'],
             mode='markers',
@@ -629,7 +629,7 @@ def plot_kmeans_formant_map(vowel_data, audio_filename, n_clusters=6):
                 ellipse_x = mean_x + 1.96 * lambda_[0] * np.cos(t) * np.cos(angle) - 1.96 * lambda_[1] * np.sin(t) * np.sin(angle)
                 ellipse_y = mean_y + 1.96 * lambda_[0] * np.cos(t) * np.sin(angle) + 1.96 * lambda_[1] * np.sin(t) * np.cos(angle)
 
-                fig.add_Trace(go.Scatter(
+                fig.add_trace(go.Scatter(
                     x=ellipse_x, y=ellipse_y,
                     mode='lines',
                     line=dict(color=colors[cluster % len(colors)], width=2, dash='dash'),
