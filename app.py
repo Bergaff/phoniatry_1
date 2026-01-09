@@ -34,10 +34,8 @@ def transcribe_cached(audio_path):
 
 @st.cache_data(show_spinner="Акустический анализ гласных (Praat)...")
 def analyze_vowels_cached(audio_path, transcription_segments):
-    # ВАЖНО: Вызываем функцию, которая реально считает данные
-    vowel_data = analyze_vowel_segments(audio_path, transcription_segments)
-    # Возвращаем дважды, если логика main ожидает два значения (vowel_data и log_data)
-    return vowel_data, vowel_data 
+    v_data, p_log = analyze_vowel_segments(audio_path, transcription_segments)
+    return v_data, p_log
 
 @st.cache_data(show_spinner=False)
 def get_plot_3d(vowel_data, audio_filename):
@@ -204,40 +202,54 @@ def analyze_vowel_segments(audio_path, transcription_segments):
 
 def save_phoneme_data(vowel_data, phoneme_log_data, audio_path):
     """Сохраняет данные фонем и высших точек в CSV."""
+    if not vowel_data:
+        st.warning("Нет данных для сохранения (vowel_data пуст).")
+        return
+
     base_name = os.path.splitext(os.path.basename(audio_path))[0]
     phoneme_csv_path = os.path.join(OUTPUT_DIR, f'{base_name}_phoneme_data.csv')
 
-    # Подготовка данных о фонемах
+    # Создаем DataFrame
     phoneme_df = pd.DataFrame(phoneme_log_data)
-
-    # Подготовка данных о высших точках
     df = pd.DataFrame(vowel_data)
+
+    # ПРОВЕРКА: есть ли колонка 'vowel'
+    if 'vowel' not in df.columns:
+        st.error("Ошибка: колонка 'vowel' отсутствует в данных.")
+        return
+
     highest_points = []
+    # Группировка теперь безопасна
     for vowel, group in df.groupby('vowel'):
         max_duration_value = group['duration'].max()
         max_duration_rows = group[group['duration'] == max_duration_value]
-        highest_point = max_duration_rows.sample(n=1, random_state=random.randint(0, 1000)).iloc[0] if len(max_duration_rows) > 1 else max_duration_rows.iloc[0]
-        log_pitch = np.log(max(highest_point['mean_pitch'], 1))
-        max_log_pitch = df['mean_pitch'].apply(lambda x: np.log(max(x, 1))).max()
-        min_log_pitch = df['mean_pitch'].apply(lambda x: np.log(max(x, 1))).min()
-        log_pitch_range = max_log_pitch - min_log_pitch if max_log_pitch != min_log_pitch else 1
-        norm_log_pitch = (log_pitch - min_log_pitch) / log_pitch_range
-        max_energy = df['total_energy'].max()
-        min_energy = df['total_energy'].min()
-        energy_range = max_energy - min_energy if max_energy != min_energy else 1
-        norm_energy = (highest_point['total_energy'] - min_energy) / energy_range
+        
+        # Выбираем одну строку
+        highest_point = max_duration_rows.iloc[0]
+        
+        # Расчет параметров
+        mean_p = highest_point['mean_pitch']
+        log_pitch = np.log(max(mean_p, 1))
+        
+        # Нормализация
+        all_pitches = df['mean_pitch'].apply(lambda x: np.log(max(x, 1)))
+        max_lp, min_lp = all_pitches.max(), all_pitches.min()
+        norm_log_pitch = (log_pitch - min_lp) / (max_lp - min_lp) if max_lp != min_lp else 0
+        
+        max_en, min_en = df['total_energy'].max(), df['total_energy'].min()
+        norm_energy = (highest_point['total_energy'] - min_en) / (max_en - min_en) if max_en != min_en else 0
+
         highest_points.append({
             'vowel': vowel,
             'highest_point': True,
-            'mean_pitch': highest_point['mean_pitch'],
+            'mean_pitch': mean_p,
             'log_pitch': log_pitch,
             'norm_log_pitch': norm_log_pitch,
             'total_energy': highest_point['total_energy'],
             'norm_energy': norm_energy
         })
+    
     highest_df = pd.DataFrame(highest_points)
-
-    # Объединение данных
     combined_df = pd.concat([phoneme_df, highest_df], ignore_index=True, sort=False)
     combined_df.to_csv(phoneme_csv_path, index=False, float_format='%.6f', encoding='utf-8-sig')
 
