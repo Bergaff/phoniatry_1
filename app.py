@@ -1,25 +1,26 @@
 import os
 import parselmouth
-from parselmouth.praat import call
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from faster_whisper import WhisperModel
-from scipy.spatial import ConvexHull
 import math
 import re
 import random
 import streamlit as st
-import io
-import streamlit.components.v1 as components
 
+# --- Константы ---
+OUTPUT_DIR = "./SpeechViz3D"
+WHISPER_MODEL = "medium"
+PITCH_FLOOR = 75
+PITCH_CEILING = 600
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Добавь в самый верх, после импортов
+# --- Кэширование ресурсов ---
 @st.cache_resource(show_spinner="Загрузка модели Whisper...")
 def load_whisper_model():
-    # Используем модель small или medium для баланса скорости и качества
-    return WhisperModel("medium", device="auto", compute_type="int8")
+    return WhisperModel(WHISPER_MODEL, device="auto", compute_type="int8")
 
 @st.cache_data(show_spinner="Транскрибация аудио...")
 def transcribe_cached(audio_path):
@@ -32,10 +33,9 @@ def transcribe_cached(audio_path):
     } for segment in segments for word in segment.words if word.probability > 0.1]
     return word_level_segments
 
-@st.cache_data(show_spinner="Акустический анализ гласных (Praat)...")
+@st.cache_data(show_spinner="Акустический анализ (Praat)...")
 def analyze_vowels_cached(audio_path, transcription_segments):
-    v_data, p_log = analyze_vowel_segments(audio_path, transcription_segments)
-    return v_data, p_log
+    return analyze_vowel_segments(audio_path, transcription_segments)
 
 @st.cache_data(show_spinner=False)
 def get_plot_3d(vowel_data, audio_filename):
@@ -78,7 +78,6 @@ def transcribe_audio_with_whisper(audio_path, model_size="medium"):
         return []
 
 def extract_phonemes(text):
-    """Извлекает фонемы, корректно обрабатывая йотированные гласные."""
     phonemes = []
     text_clean = re.sub(r'[^а-яё]', '', text.lower())
     for i, char in enumerate(text_clean):
@@ -96,108 +95,86 @@ def extract_phonemes(text):
     return phonemes
 
 def find_acoustic_features(sound, segment_start, segment_end):
-    """Извлекает акустические признаки с защитой от ошибок (Jitter/Shimmer)."""
+    """Извлекает расширенный набор признаков для сегмента."""
+    # Обрезаем звук для анализа микро-изменений (jitter/shimmer)
+    part = sound.extract_part(from_time=segment_start, to_time=segment_end)
+    
+    # Базовые объекты
+    formant_obj = part.to_formant_burg()
+    pitch_obj = part.to_pitch(pitch_floor=PITCH_FLOOR, pitch_ceiling=PITCH_CEILING)
+    intensity_obj = part.to_intensity()
+    
+    # 1. Форманты (середина сегмента для стабильности)
+    mid_t = (segment_start + segment_end) / 2
+    f1 = formant_obj.get_value_at_time(1, mid_t)
+    f2 = formant_obj.get_value_at_time(2, mid_t)
+    
+    # 2. Основной тон и Интенсивность (средние)
+    pitch_values = pitch_obj.selected_array['frequency']
+    pitch_values = pitch_values[pitch_values > 0]
+    mean_f0 = np.mean(pitch_values) if len(pitch_values) > 0 else np.nan
+    mean_int = intensity_obj.get_average()
+    
+    # 3. Энергия (физическая: Pa^2 * s)
+    # Используем формулу: Energy = 10^((Intensity-120)/10) * duration
+    # Это дает приближенное значение акустической энергии
+    energy = (10**((mean_int - 120) / 10)) * (segment_end - segment_start)
+
+    # 4. Голосовые качества (Jitter, Shimmer, HNR)
     try:
-        # Вырезаем нужный кусок звука
-        part = sound.extract_part(from_time=segment_start, to_time=segment_end)
+        point_process = parselmouth.praat.call(part, "To PointProcess (periodic, cc)", PITCH_FLOOR, PITCH_CEILING)
+        jitter = parselmouth.praat.call(point_process, "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3) * 100 # в %
+        shimmer = parselmouth.praat.call([part, point_process], "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6) # в дБ
         
-        # 1. Форманты (F1, F2)
-        formant_obj = part.to_formant_burg()
-        mid_time = (segment_start + segment_end) / 2
-        f1 = call(formant_obj, "Get value at time", 1, mid_time, "Hertz", "Linear")
-        f2 = call(formant_obj, "Get value at time", 2, mid_time, "Hertz", "Linear")
-
-        # 2. Основной тон (Pitch / F0)
-        pitch_obj = part.to_pitch(pitch_floor=PITCH_FLOOR, pitch_ceiling=PITCH_CEILING)
-        mean_pitch = call(pitch_obj, "Get mean", 0, 0, "Hertz")
-
-        # 3. Интенсивность и Энергия
-        intensity_obj = part.to_intensity()
-        mean_intensity = call(intensity_obj, "Get mean", 0, 0, "energy")
-        # Энергия через RMS (среднеквадратичное)
-        rms_amplitude = np.sqrt(np.mean(part.values**2)) if part.values.size > 0 else 0
-        duration = segment_end - segment_start
-        total_energy = (rms_amplitude**2) * duration
-
-        # 4. Jitter, Shimmer, HNR (с проверкой на наличие голоса)
-        jitter, shimmer, hnr = 0, 0, 0
-        if not math.isnan(mean_pitch) and mean_pitch > 0:
-            point_process = call([part, pitch_obj], "To PointProcess (cc)")
-            num_pulses = call(point_process, "Get number of points")
-            
-            # Расчет только если достаточно периодов (пульсов)
-            if num_pulses > 3:
-                jitter = call([part, point_process], "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3) * 100
-                shimmer = call([part, point_process], "Get shimmer (local_dB)", 0, 0, 0.0001, 0.02, 1.3, 1.6)
-                
-                harmonicity = part.to_harmonicity()
-                hnr = call(harmonicity, "Get mean", 0, 0)
-
-        return {
-            'F1': f1, 'F2': f2, 'duration': duration, 
-            'pitch': mean_pitch, 'intensity': mean_intensity,
-            'jitter': jitter, 'shimmer': shimmer, 'hnr': hnr,
-            'total_energy': total_energy
-        }
+        harmonicity = part.to_harmonicity()
+        hnr = harmonicity.get_value(mid_t)
     except:
-        return None
+        jitter, shimmer, hnr = np.nan, np.nan, np.nan
+
+    return f1, f2, mean_f0, mean_int, energy, jitter, shimmer, hnr
+
 
 def analyze_vowel_segments(audio_path, transcription_segments):
-    """Анализирует гласные, вызывая обновленную функцию поиска признаков."""
     J_DURATION = 0.04
     vowel_data = []
-    phoneme_log_data = []
-    
     try:
         sound = parselmouth.Sound(audio_path)
     except Exception as e:
-        st.error(f"Ошибка загрузки файла: {e}")
+        st.error(f"Ошибка аудио: {e}")
         return [], []
 
     for segment in transcription_segments:
         word, word_start, word_end = segment['word'], segment['start'], segment['end']
         phonemes_in_word = extract_phonemes(word)
-        
         if not phonemes_in_word: continue
         
+        vowels_only = [p for p in phonemes_in_word if p != 'й']
+        v_count = len(vowels_only)
         j_count = phonemes_in_word.count('й')
-        vowel_count = len([p for p in phonemes_in_word if p != 'й'])
         
-        # Расчет времени на каждую гласную
-        eff_duration = word_end - word_start - (j_count * J_DURATION)
-        if vowel_count == 0 or eff_duration <= 0: continue
-        v_part = eff_duration / vowel_count
+        effective_duration = word_end - word_start - (j_count * J_DURATION)
+        if v_count == 0 or effective_duration <= 0: continue
         
+        v_dur = effective_duration / v_count
         current_time = word_start
-        for ph in phonemes_in_word:
-            if ph == 'й':
+        
+        for phoneme in phonemes_in_word:
+            if phoneme == 'й':
                 current_time += J_DURATION
                 continue
             
-            v_start = current_time
-            v_end = current_time + v_part
+            s_start, s_end = current_time, current_time + v_dur
+            f1, f2, f0, intensity, energy, jitter, shimmer, hnr = find_acoustic_features(sound, s_start, s_end)
             
-            # ВЫЗОВ ОБНОВЛЕННОЙ ФУНКЦИИ
-            res = find_acoustic_features(sound, v_start, v_end)
-            
-            if res and not (math.isnan(res['F1']) or math.isnan(res['F2'])):
-                entry = {
-                    'word': word, 'vowel': ph, 
-                    'F1': res['F1'], 'F2': res['F2'],
-                    'duration': res['duration'], 
-                    'mean_pitch': res['pitch'], 
-                    'mean_intensity': res['intensity'],
-                    'start_time': v_start, 'end_time': v_end, 
-                    'total_energy': res['total_energy'],
-                    'jitter': res['jitter'], 'shimmer': res['shimmer'], 'hnr': res['hnr']
-                }
-                vowel_data.append(entry)
-                phoneme_log_data.append(entry)
-                
-            current_time = v_end
-            
-    st.write(f"Найдено гласных: {len(vowel_data)}")
-    return vowel_data, phoneme_log_data
+            if not math.isnan(f1) and not math.isnan(f2):
+                vowel_data.append({
+                    'word': word, 'vowel': phoneme, 'F1': f1, 'F2': f2,
+                    'duration': v_dur, 'mean_pitch': f0, 'mean_intensity': intensity,
+                    'total_energy': energy, 'jitter': jitter, 'shimmer': shimmer, 'hnr': hnr
+                })
+            current_time = s_end
+
+    return vowel_data, vowel_data # Возвращаем дубликат для совместимости логов
 
 
 def save_phoneme_data(vowel_data, phoneme_log_data, audio_path):
@@ -254,66 +231,88 @@ def save_phoneme_data(vowel_data, phoneme_log_data, audio_path):
     combined_df.to_csv(phoneme_csv_path, index=False, float_format='%.6f', encoding='utf-8-sig')
 
 def plot_3d_vowel_count(vowel_data, audio_filename):
+    if not vowel_data: return None, None
     df = pd.DataFrame(vowel_data)
     vowel_order = ['и', 'ы', 'у', 'о', 'а', 'э']
-
-    # Агрегация данных для 3D карты
-    agg_df = df.groupby('vowel').agg({
-        'F1': 'mean', 'F2': 'mean', 'mean_intensity': 'mean',
-        'RMS_Amplitude': 'mean', 'total_energy': 'mean',
-        'Jitter_pct': 'mean', 'Shimmer_dB': 'mean', 'HNR_dB': 'mean',
-        'vowel': 'count'
-    }).rename(columns={'vowel': 'count'}).reindex(vowel_order).dropna(subset=['F1'])
-
+    
+    # Агрегация данных для визуализации
+    plot_rows = []
+    for v in vowel_order:
+        v_df = df[df['vowel'] == v]
+        if v_df.empty: continue
+        
+        plot_rows.append({
+            'vowel': v,
+            'avg_F1': v_df['F1'].mean(),
+            'avg_F2': v_df['F2'].mean(),
+            'count': len(v_df),
+            'avg_int': v_df['mean_intensity'].mean(),
+            'avg_energy': v_df['total_energy'].mean(),
+            'avg_jitter': v_df['jitter'].mean(),
+            'avg_shimmer': v_df['shimmer'].mean(),
+            'avg_hnr': v_df['hnr'].mean()
+        })
+    
+    res_df = pd.DataFrame(plot_rows)
+    
     fig = go.Figure()
-
+    
     # Линии от пола до точек
-    for i, row in agg_df.iterrows():
+    for _, row in res_df.iterrows():
         fig.add_trace(go.Scatter3d(
-            x=[row['F1'], row['F1']], y=[row['F2'], row['F2']], z=[0, row['count']],
-            mode='lines', line=dict(color='gray', width=2), showlegend=False
+            x=[row['avg_F1'], row['avg_F1']],
+            y=[row['avg_F2'], row['avg_F2']],
+            z=[0, row['count']],
+            mode='lines', line=dict(color='rgba(100,100,100,0.5)', width=4),
+            showlegend=False, hoverinfo='none'
         ))
 
-    # Точки с расширенным Hover
-    hover_templates = [
-        f"<b>Фонема: {v}</b><br>" +
-        f"Кол-во: {row['count']}<br>" +
-        f"F1: {row['F1']:.0f} Гц | F2: {row['F2']:.0f} Гц<br>" +
-        f"RMS: {row['RMS_Amplitude']:.4f}<br>" +
-        f"Energy: {row['total_energy']:.6f} Pa²s<br>" +
-        f"Jitter: {row['Jitter_pct']:.2f}%<br>" +
-        f"Shimmer: {row['Shimmer_dB']:.2f} dB<br>" +
-        f"HNR: {row['HNR_dB']:.2f} dB"
-        for v, row in agg_df.iterrows()
-    ]
-
+    # Сами точки (размер зависит от интенсивности)
     fig.add_trace(go.Scatter3d(
-        x=agg_df['F1'], y=agg_df['F2'], z=agg_df['count'],
+        x=res_df['avg_F1'], y=res_df['avg_F2'], z=res_df['count'],
         mode='markers+text',
-        text=agg_df.index,
-        hovertext=hover_templates,
-        hoverinfo='text',
-        marker=dict(size=10, color=agg_df['count'], colorscale='Viridis', opacity=0.9),
-        name='Гласные'
+        marker=dict(
+            size=res_df['avg_int']/2, 
+            color=res_df['avg_energy'], 
+            colorscale='Viridis', 
+            showscale=True,
+            colorbar=dict(title="Энергия", x=-0.1)
+        ),
+        text=res_df['vowel'],
+        hovertemplate=(
+            "<b>Гласная: %{text}</b><br>" +
+            "Кол-во: %{z}<br>" +
+            "F1: %{x:.0f} Гц | F2: %{y:.0f} Гц<br>" +
+            "Энергия (Pa²·s): %{marker.color:.6f}<br>" +
+            "Jitter: %{customdata[0]:.2f}%<br>" +
+            "Shimmer: %{customdata[1]:.2f} дБ<br>" +
+            "HNR: %{customdata[2]:.1f} дБ<extra></extra>"
+        ),
+        customdata=res_df[['avg_jitter', 'avg_shimmer', 'avg_hnr']],
+        name="Параметры фонем"
     ))
 
-    # Соединительная линия и-ы-у-о-а-э-и
-    loop_df = pd.concat([agg_df, agg_df.iloc[[0]]])
-    fig.add_trace(go.Scatter3d(
-        x=loop_df['F1'], y=loop_df['F2'], z=loop_df['count'],
-        mode='lines', line=dict(color='red', width=4), name='Траектория'
-    ))
+    # Линия последовательности (трапеция гласных)
+    if len(res_df) > 1:
+        seq_df = res_df.set_index('vowel').reindex(vowel_order).dropna()
+        fig.add_trace(go.Scatter3d(
+            x=list(seq_df['avg_F1']) + [seq_df['avg_F1'].iloc[0]],
+            y=list(seq_df['avg_F2']) + [seq_df['avg_F2'].iloc[0]],
+            z=list(seq_df['count']) + [seq_df['count'].iloc[0]],
+            mode='lines', line=dict(color='red', width=6), name='Цикл и-ы-у-о-а-э-и'
+        ))
 
     fig.update_layout(
         scene=dict(
             xaxis=dict(title='F1 (Гц)', autorange="reversed"),
             yaxis=dict(title='F2 (Гц)', autorange="reversed"),
-            zaxis=dict(title='Количество')
+            zaxis=dict(title='Частота встречи'),
         ),
         margin=dict(l=0, r=0, b=0, t=40),
-        title=f"3D Карта фонем: {os.path.basename(audio_filename)}"
+        title="3D Анализ: Форманты, Энергия и Голосовые качества",
+        width=1000, height=800
     )
-    return fig, agg_df
+    return fig, res_df
 
 def plot_vowel_histogram(vowel_data):
     """Строит гистограмму количества гласных."""
