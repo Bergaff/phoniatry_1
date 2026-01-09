@@ -203,29 +203,48 @@ def get_russian_norms(gender='female'):
 
 def plot_radar_star(vowel_data, gender):
     df = pd.DataFrame(vowel_data)
+    if df.empty:
+        return None, None
+        
     norms = get_russian_norms(gender)
     v_order = ['и', 'ы', 'у', 'о', 'а', 'э']
     
-    agg = df.groupby('vowel').mean().reindex(v_order)
+    # Исправлено: добавлен numeric_only=True
+    agg = df.groupby('vowel').mean(numeric_only=True).reindex(v_order)
+    
     fig = go.Figure()
 
     for v in v_order:
-        if v not in agg.index or pd.isna(agg.loc[v, 'F1']): continue
+        # Проверяем, есть ли данные для этой гласной и не пустые ли они
+        if v not in agg.index or pd.isna(agg.loc[v, 'F1']): 
+            continue
         
-        p, n = agg.loc[v], norms[v]
+        p = agg.loc[v]
+        n = norms[v]
+        
         # Расчет отклонений в %
-        vals = [
-            (p['F1']-n['F1'])/n['F1']*100, (p['F2']-n['F2'])/n['F2']*100,
-            (p['duration']-n['dur'])/n['dur']*100, 12*np.log2(p['mean_pitch']/n['F0'])
-        ]
-        
-        fig.add_trace(go.Scatterpolar(
-            r=vals + [vals[0]],
-            theta=['F1 %', 'F2 %', 'Длительность %', 'Тон (полутона)', 'F1 %'],
-            fill='toself', name=f'Гласная {v}'
-        ))
+        try:
+            vals = [
+                (p['F1'] - n['F1']) / n['F1'] * 100, 
+                (p['F2'] - n['F2']) / n['F2'] * 100,
+                (p['duration'] - n['dur']) / n['dur'] * 100, 
+                12 * np.log2(max(p['mean_pitch'], 1) / n['F0'])
+            ]
+            
+            fig.add_trace(go.Scatterpolar(
+                r=vals + [vals[0]],
+                theta=['F1 %', 'F2 %', 'Длительность %', 'Тон (полутона)', 'F1 %'],
+                fill='toself', 
+                name=f'Гласная {v}'
+            ))
+        except Exception as e:
+            print(f"Ошибка расчета для гласной {v}: {e}")
+            continue
 
-    fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[-100, 100])), title="Звезда отклонений от нормы")
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[-100, 100])), 
+        title="Звезда отклонений от нормы (в %)"
+    )
     return fig, agg
 
 # --- Основное приложение Streamlit ---
