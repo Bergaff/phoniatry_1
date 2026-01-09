@@ -98,35 +98,36 @@ def extract_phonemes(text):
     return phonemes
 
 def find_acoustic_features(sound, segment_start, segment_end):
-    """Извлекает акустические признаки с защитой от ошибок (Try/Except)."""
+    """Извлекает акустические признаки с защитой от ошибок (Jitter/Shimmer)."""
     try:
+        # Вырезаем нужный кусок звука
         part = sound.extract_part(from_time=segment_start, to_time=segment_end)
         
-        # Форманты
+        # 1. Форманты (F1, F2)
         formant_obj = part.to_formant_burg()
         mid_time = (segment_start + segment_end) / 2
         f1 = call(formant_obj, "Get value at time", 1, mid_time, "Hertz", "Linear")
         f2 = call(formant_obj, "Get value at time", 2, mid_time, "Hertz", "Linear")
 
-        # Pitch
+        # 2. Основной тон (Pitch / F0)
         pitch_obj = part.to_pitch(pitch_floor=PITCH_FLOOR, pitch_ceiling=PITCH_CEILING)
         mean_pitch = call(pitch_obj, "Get mean", 0, 0, "Hertz")
 
-        # Интенсивность и энергия
-        rms_amplitude = np.sqrt(np.mean(part.values**2)) if part.values.size > 0 else 0
-        total_energy = (rms_amplitude**2) * (segment_end - segment_start)
+        # 3. Интенсивность и Энергия
         intensity_obj = part.to_intensity()
         mean_intensity = call(intensity_obj, "Get mean", 0, 0, "energy")
+        # Энергия через RMS (среднеквадратичное)
+        rms_amplitude = np.sqrt(np.mean(part.values**2)) if part.values.size > 0 else 0
+        duration = segment_end - segment_start
+        total_energy = (rms_amplitude**2) * duration
 
-        # --- Расчет Jitter, Shimmer, HNR с проверкой ---
+        # 4. Jitter, Shimmer, HNR (с проверкой на наличие голоса)
         jitter, shimmer, hnr = 0, 0, 0
-        
-        # Проверяем, есть ли голос в этом фрагменте
         if not math.isnan(mean_pitch) and mean_pitch > 0:
             point_process = call([part, pitch_obj], "To PointProcess (cc)")
             num_pulses = call(point_process, "Get number of points")
             
-            # Для Jitter/Shimmer нужно минимум 3-6 пульсов
+            # Расчет только если достаточно периодов (пульсов)
             if num_pulses > 3:
                 jitter = call([part, point_process], "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3) * 100
                 shimmer = call([part, point_process], "Get shimmer (local_dB)", 0, 0, 0.0001, 0.02, 1.3, 1.6)
@@ -135,59 +136,70 @@ def find_acoustic_features(sound, segment_start, segment_end):
                 hnr = call(harmonicity, "Get mean", 0, 0)
 
         return {
-            'F1': f1, 'F2': f2, 'pitch': mean_pitch, 'intensity': mean_intensity,
-            'rms': rms_amplitude, 'energy': total_energy,
-            'jitter': jitter, 'shimmer': shimmer, 'hnr': hnr
+            'F1': f1, 'F2': f2, 'duration': duration, 
+            'pitch': mean_pitch, 'intensity': mean_intensity,
+            'jitter': jitter, 'shimmer': shimmer, 'hnr': hnr,
+            'total_energy': total_energy
         }
-    except Exception as e:
-        # Если что-то пошло не так, возвращаем пустые значения, чтобы не прерывать цикл
-        return {
-            'F1': np.nan, 'F2': np.nan, 'pitch': 0, 'intensity': 0,
-            'rms': 0, 'energy': 0, 'jitter': 0, 'shimmer': 0, 'hnr': 0
-        }
+    except:
+        return None
 
 def analyze_vowel_segments(audio_path, transcription_segments):
+    """Анализирует гласные, вызывая обновленную функцию поиска признаков."""
     J_DURATION = 0.04
     vowel_data = []
-    sound = parselmouth.Sound(audio_path)
+    phoneme_log_data = []
+    
+    try:
+        sound = parselmouth.Sound(audio_path)
+    except Exception as e:
+        st.error(f"Ошибка загрузки файла: {e}")
+        return [], []
 
     for segment in transcription_segments:
         word, word_start, word_end = segment['word'], segment['start'], segment['end']
         phonemes_in_word = extract_phonemes(word)
+        
         if not phonemes_in_word: continue
-
-        vowel_phonemes = [p for p in phonemes_in_word if p != 'й']
-        if not vowel_phonemes: continue
-
-        vowel_duration_part = (word_end - word_start - (phonemes_in_word.count('й') * J_DURATION)) / len(vowel_phonemes)
+        
+        j_count = phonemes_in_word.count('й')
+        vowel_count = len([p for p in phonemes_in_word if p != 'й'])
+        
+        # Расчет времени на каждую гласную
+        eff_duration = word_end - word_start - (j_count * J_DURATION)
+        if vowel_count == 0 or eff_duration <= 0: continue
+        v_part = eff_duration / vowel_count
+        
         current_time = word_start
-
-        for phoneme in phonemes_in_word:
-            if phoneme == 'й':
+        for ph in phonemes_in_word:
+            if ph == 'й':
                 current_time += J_DURATION
                 continue
-
-            v_start, v_end = current_time, current_time + vowel_duration_part
-            if v_end > v_start:
-                features = find_acoustic_features(sound, v_start, v_end)
-
-                if not (math.isnan(features['F1']) or math.isnan(features['F2'])):
-                    vowel_data.append({
-                        'word': word, 'vowel': phoneme,
-                        'F1': features['F1'], 'F2': features['F2'],
-                        'duration': v_end - v_start,
-                        'mean_pitch': features['pitch'],
-                        'mean_intensity': features['intensity'],
-                        'RMS_Amplitude': features['rms'],
-                        'total_energy': features['energy'],
-                        'Jitter_pct': features['jitter'],
-                        'Shimmer_dB': features['shimmer'],
-                        'HNR_dB': features['hnr'],
-                        'start_time': v_start
-                    })
+            
+            v_start = current_time
+            v_end = current_time + v_part
+            
+            # ВЫЗОВ ОБНОВЛЕННОЙ ФУНКЦИИ
+            res = find_acoustic_features(sound, v_start, v_end)
+            
+            if res and not (math.isnan(res['F1']) or math.isnan(res['F2'])):
+                entry = {
+                    'word': word, 'vowel': ph, 
+                    'F1': res['F1'], 'F2': res['F2'],
+                    'duration': res['duration'], 
+                    'mean_pitch': res['pitch'], 
+                    'mean_intensity': res['intensity'],
+                    'start_time': v_start, 'end_time': v_end, 
+                    'total_energy': res['total_energy'],
+                    'jitter': res['jitter'], 'shimmer': res['shimmer'], 'hnr': res['hnr']
+                }
+                vowel_data.append(entry)
+                phoneme_log_data.append(entry)
+                
             current_time = v_end
-
-    return vowel_data
+            
+    st.write(f"Найдено гласных: {len(vowel_data)}")
+    return vowel_data, phoneme_log_data
 
 
 def save_phoneme_data(vowel_data, phoneme_log_data, audio_path):
