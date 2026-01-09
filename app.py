@@ -96,6 +96,21 @@ def extract_phonemes(text):
 
 def find_acoustic_features(sound, segment_start, segment_end):
     """Извлекает расширенный набор признаков для сегмента."""
+    
+    # 1. ПРОВЕРКА ДЛИНЫ СЕГМЕНТА (Фикс ошибки)
+    duration = segment_end - segment_start
+    if duration < 0.02:  # Если сегмент короче 20мс, Praat может упасть
+        return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
+
+    try:
+        part = sound.extract_part(from_time=segment_start, to_time=segment_end)
+        
+        # Базовые объекты
+        formant_obj = part.to_formant_burg()
+        pitch_obj = part.to_pitch(pitch_floor=PITCH_FLOOR, pitch_ceiling=PITCH_CEILING)
+        
+        # Если сегмент очень короткий, to_intensity может выдать ошибку
+        intensity_obj = part.to_intensity()
     # Обрезаем звук для анализа микро-изменений (jitter/shimmer)
     part = sound.extract_part(from_time=segment_start, to_time=segment_end)
     
@@ -128,8 +143,9 @@ def find_acoustic_features(sound, segment_start, segment_end):
         
         harmonicity = part.to_harmonicity()
         hnr = harmonicity.get_value(mid_t)
-    except:
-        jitter, shimmer, hnr = np.nan, np.nan, np.nan
+   except Exception as e:
+        # Если Praat все равно не может обработать сегмент, возвращаем NaN
+        return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
 
     return f1, f2, mean_f0, mean_int, energy, jitter, shimmer, hnr
 
