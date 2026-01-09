@@ -520,23 +520,20 @@ def main():
         st.markdown("---")
 
         # 1. 3D-карта
-      st.subheader("3D-карта количества гласных")
+      # 1. 3D-карта
+        st.subheader("3D-карта количества гласных")
         fig_3d, df_res = get_plot_3d(vowel_data, audio_path)
         if fig_3d:
             st.plotly_chart(fig_3d, use_container_width=True)
             fig_3d.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_vowel_count_3d.html"))
-    # Используем .empty для проверки DataFrame
-    if plot_data_dict is not None and not plot_data_dict.empty:
-                df_count = pd.DataFrame([{
-                'vowel': v,
-                'count': row['count'],
-                'avg_F1': row['F1'],
-    'avg_F2': row['F2'],
-    'avg_intensity_dB': row['mean_intensity'],
-    'avg_energy': row['total_energy']
-    } for v, row in plot_data_dict.iterrows()])
-                st.download_button("Скачать данные 3D", data=df_count.to_csv(index=False, encoding='utf-8-sig').encode(),
-                                   file_name=f"{base_name}_vowel_count_summary.csv", mime="text/csv")
+            
+            if df_res is not None and not df_res.empty:
+                st.download_button(
+                    "Скачать данные 3D (сводка)", 
+                    data=df_res.to_csv(index=False, encoding='utf-8-sig').encode(),
+                    file_name=f"{base_name}_vowel_count_summary.csv", 
+                    mime="text/csv"
+                )
         st.markdown("---")
 
         # 2. Гистограмма
