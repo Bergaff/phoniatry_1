@@ -520,12 +520,13 @@ def main():
         st.markdown("---")
 
         # 1. 3D-карта
-        st.subheader("3D-карта количества гласных")
-        fig_3d, plot_data_dict = get_plot_3d(vowel_data, audio_path)
+      st.subheader("3D-карта количества гласных")
+        fig_3d, df_res = get_plot_3d(vowel_data, audio_path)
         if fig_3d:
             st.plotly_chart(fig_3d, use_container_width=True)
             fig_3d.write_html(os.path.join(OUTPUT_DIR, f"{base_name}_vowel_count_3d.html"))
-            if plot_data_dict:
+    # Используем .empty для проверки DataFrame
+    if plot_data_dict is not None and not plot_data_dict.empty:
                 df_count = pd.DataFrame([{
                 'vowel': v,
                 'count': row['count'],
