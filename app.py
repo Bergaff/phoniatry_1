@@ -98,43 +98,53 @@ def extract_phonemes(text):
     return phonemes
 
 def find_acoustic_features(sound, segment_start, segment_end):
-    """Извлекает расширенный набор акустических признаков для сегмента."""
-    # Вырезаем фрагмент звука
-    part = sound.extract_part(from_time=segment_start, to_time=segment_end)
+    """Извлекает акустические признаки с защитой от ошибок (Try/Except)."""
+    try:
+        part = sound.extract_part(from_time=segment_start, to_time=segment_end)
+        
+        # Форманты
+        formant_obj = part.to_formant_burg()
+        mid_time = (segment_start + segment_end) / 2
+        f1 = call(formant_obj, "Get value at time", 1, mid_time, "Hertz", "Linear")
+        f2 = call(formant_obj, "Get value at time", 2, mid_time, "Hertz", "Linear")
 
-    # Форманты
-    formant_obj = part.to_formant_burg()
-    f1 = call(formant_obj, "Get value at time", 1, (segment_start + segment_end)/2, "Hertz", "Linear")
-    f2 = call(formant_obj, "Get value at time", 2, (segment_start + segment_end)/2, "Hertz", "Linear")
+        # Pitch
+        pitch_obj = part.to_pitch(pitch_floor=PITCH_FLOOR, pitch_ceiling=PITCH_CEILING)
+        mean_pitch = call(pitch_obj, "Get mean", 0, 0, "Hertz")
 
-    # Интенсивность и RMS
-    intensity_obj = part.to_intensity()
-    mean_intensity = call(intensity_obj, "Get mean", 0, 0, "energy")
-    # RMS_Amplitude из интенсивности (упрощенно) или напрямую из амплитуды волны
-    rms_amplitude = np.sqrt(np.mean(part.values**2))
+        # Интенсивность и энергия
+        rms_amplitude = np.sqrt(np.mean(part.values**2)) if part.values.size > 0 else 0
+        total_energy = (rms_amplitude**2) * (segment_end - segment_start)
+        intensity_obj = part.to_intensity()
+        mean_intensity = call(intensity_obj, "Get mean", 0, 0, "energy")
 
-    # Энергия (Pa^2 * s)
-    total_energy = rms_amplitude**2 * (segment_end - segment_start)
+        # --- Расчет Jitter, Shimmer, HNR с проверкой ---
+        jitter, shimmer, hnr = 0, 0, 0
+        
+        # Проверяем, есть ли голос в этом фрагменте
+        if not math.isnan(mean_pitch) and mean_pitch > 0:
+            point_process = call([part, pitch_obj], "To PointProcess (cc)")
+            num_pulses = call(point_process, "Get number of points")
+            
+            # Для Jitter/Shimmer нужно минимум 3-6 пульсов
+            if num_pulses > 3:
+                jitter = call([part, point_process], "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3) * 100
+                shimmer = call([part, point_process], "Get shimmer (local_dB)", 0, 0, 0.0001, 0.02, 1.3, 1.6)
+                
+                harmonicity = part.to_harmonicity()
+                hnr = call(harmonicity, "Get mean", 0, 0)
 
-    # Pitch и микрогармоника (Jitter, Shimmer, HNR)
-    pitch_obj = part.to_pitch(pitch_floor=PITCH_FLOOR, pitch_ceiling=PITCH_CEILING)
-    mean_pitch = call(pitch_obj, "Get mean", 0, 0, "Hertz")
-
-    # Создаем PointProcess для расчета Jitter/Shimmer
-    point_process = call([part, pitch_obj], "To PointProcess (cc)")
-
-    jitter = call([part, point_process], "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3) * 100 # в %
-    shimmer = call([part, point_process], "Get shimmer (local_dB)", 0, 0, 0.0001, 0.02, 1.3, 1.6) # в дБ
-
-    # HNR (Harmonicity)
-    harmonicity = part.to_harmonicity()
-    hnr = call(harmonicity, "Get mean", 0, 0)
-
-    return {
-        'F1': f1, 'F2': f2, 'pitch': mean_pitch, 'intensity': mean_intensity,
-        'rms': rms_amplitude, 'energy': total_energy,
-        'jitter': jitter, 'shimmer': shimmer, 'hnr': hnr
-    }
+        return {
+            'F1': f1, 'F2': f2, 'pitch': mean_pitch, 'intensity': mean_intensity,
+            'rms': rms_amplitude, 'energy': total_energy,
+            'jitter': jitter, 'shimmer': shimmer, 'hnr': hnr
+        }
+    except Exception as e:
+        # Если что-то пошло не так, возвращаем пустые значения, чтобы не прерывать цикл
+        return {
+            'F1': np.nan, 'F2': np.nan, 'pitch': 0, 'intensity': 0,
+            'rms': 0, 'energy': 0, 'jitter': 0, 'shimmer': 0, 'hnr': 0
+        }
 
 def analyze_vowel_segments(audio_path, transcription_segments):
     J_DURATION = 0.04
