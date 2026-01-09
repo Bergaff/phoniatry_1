@@ -11,7 +11,7 @@ import re
 import streamlit as st
 from sklearn.cluster import KMeans
 
-# --- Константы и Инициализация ---
+# --- Константы ---
 OUTPUT_DIR = "./SpeechViz3D"
 WHISPER_MODEL = "medium"
 PITCH_FLOOR = 75
@@ -23,7 +23,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 def load_whisper_model():
     return WhisperModel(WHISPER_MODEL, device="auto", compute_type="int8")
 
-@st.cache_data(show_spinner="Транскрибация аудио...")
+@st.cache_data(show_spinner="Транскрибация...")
 def transcribe_cached(audio_path):
     model = load_whisper_model()
     segments, _ = model.transcribe(audio_path, word_timestamps=True, language="ru")
@@ -36,7 +36,7 @@ def transcribe_cached(audio_path):
                 full_text.append(word.word.strip())
     return word_level_segments, " ".join(full_text)
 
-# --- Вспомогательные функции анализа ---
+# --- Функции анализа (без изменений) ---
 def extract_phonemes(text):
     phonemes = []
     text_clean = re.sub(r'[^а-яё]', '', text.lower())
@@ -54,7 +54,6 @@ def extract_phonemes(text):
         elif char in 'аоуэыи': phonemes.append(char)
     return phonemes
 
-
 def find_acoustic_features(formant_obj, pitch_obj, intensity_obj, start, end):
     f1_l, f2_l, p_l, i_l = [], [], [], []
     t = start
@@ -70,7 +69,6 @@ def find_acoustic_features(formant_obj, pitch_obj, intensity_obj, start, end):
         t += 0.005
     return np.nanmedian(f1_l), np.nanmedian(f2_l), end-start, np.nanmedian(p_l), np.nanmedian(i_l)
 
-
 def analyze_vowel_segments(audio_path, transcription_segments):
     sound = parselmouth.Sound(audio_path)
     formant_obj = sound.to_formant_burg()
@@ -84,33 +82,25 @@ def analyze_vowel_segments(audio_path, transcription_segments):
         v_only = [p for p in phonemes if p != 'й']
         if not v_only: continue
         
-        dur_v = (seg['end'] - seg['start'] - (phonemes.count('й')*0.04)) / len(v_only)
+        dur_v = (seg['end'] - seg['start'] - (phonemes.count('й') * 0.04)) / len(v_only)
         curr = seg['start']
         for p in phonemes:
             if p == 'й':
                 curr += 0.04
                 continue
             f1, f2, d, pitch, intens = find_acoustic_features(
-                formant_obj, pitch_obj, intensity_obj, curr, curr + dur_v
-            )
+                formant_obj, pitch_obj, intensity_obj, curr, curr + dur_v)
             if not np.isnan([f1, f2, pitch, intens]).any():
-                # Простая оценка энергии (можно улучшить)
-                energy = intens * d * 0.001  # примерная формула
+                energy = intens * d * 0.001
                 vowel_data.append({
-                    'word': word,
-                    'vowel': p,
-                    'F1': f1,
-                    'F2': f2,
-                    'duration': d,
-                    'mean_pitch': pitch,
-                    'mean_intensity': intens,
+                    'word': word, 'vowel': p, 'F1': f1, 'F2': f2,
+                    'duration': d, 'mean_pitch': pitch, 'mean_intensity': intens,
                     'total_energy': energy
                 })
             curr += dur_v
     return vowel_data
 
-
-# --- Визуализация 3D + размер от энергии ---
+# --- 3D-карта: шарики на основании, высота — количество ---
 def plot_3d_vowel_map(vowel_data):
     df = pd.DataFrame(vowel_data)
     v_order = ['и', 'ы', 'у', 'о', 'а', 'э']
@@ -118,8 +108,7 @@ def plot_3d_vowel_map(vowel_data):
     stats = []
     for v in v_order:
         v_df = df[df['vowel'] == v]
-        if v_df.empty:
-            continue
+        if v_df.empty: continue
         stats.append({
             'vowel': v,
             'count': len(v_df),
@@ -134,34 +123,34 @@ def plot_3d_vowel_map(vowel_data):
     if pdf.empty:
         return go.Figure(), pd.DataFrame(), df
 
-    # Размер маркера пропорционален средней энергии
-    energy_min, energy_max = pdf['mean_energy'].min(), pdf['mean_energy'].max()
-    if energy_max == energy_min:
+    # Размер от средней энергии
+    e_min, e_max = pdf['mean_energy'].min(), pdf['mean_energy'].max()
+    if e_max == e_min:
         sizes = [18] * len(pdf)
     else:
-        sizes = 12 + 36 * (pdf['mean_energy'] - energy_min) / (energy_max - energy_min)
+        sizes = 12 + 40 * (pdf['mean_energy'] - e_min) / (e_max - e_min)
 
     fig = go.Figure()
 
     colors = np.arange(len(pdf))
 
     for i, row in pdf.iterrows():
-        # Линия от пола до вершины
+        # Столбик от 0 до count
         fig.add_trace(go.Scatter3d(
             x=[row['F1'], row['F1']],
             y=[row['F2'], row['F2']],
             z=[0, row['count']],
             mode='lines',
-            line=dict(color='rgba(150,150,150,0.6)', width=3),
-            showlegend=False,
-            hoverinfo='skip'
+            line=dict(color='rgba(180,180,180,0.5)', width=3),
+            hoverinfo='skip',
+            showlegend=False
         ))
 
-        # Основная точка
+        # Шарик на основании (z=0)
         fig.add_trace(go.Scatter3d(
             x=[row['F1']],
             y=[row['F2']],
-            z=[row['count']],
+            z=[0],
             mode='markers+text',
             text=[f'"{row["vowel"]}"'],
             textposition="middle center",
@@ -169,117 +158,161 @@ def plot_3d_vowel_map(vowel_data):
                 size=sizes[i],
                 color=colors[i],
                 colorscale='Plasma',
-                opacity=0.85,
-                line=dict(color='darkgray', width=1)
+                opacity=0.9,
+                line=dict(color='rgba(40,40,40,0.8)', width=1.5)
             ),
-            name=f'Фонема "{row["vowel"]}"',
+            name=row['vowel'],
             hovertemplate=(
                 f'<b>"{row["vowel"]}"</b><br>'
-                f'F1: %{{x:.0f}} Гц<br>'
-                f'F2: %{{y:.0f}} Гц<br>'
+                f'F1: %{{x:.0f}} Гц<br>F2: %{{y:.0f}} Гц<br>'
                 f'Количество: {row["count"]}<br>'
                 f'Сред. энергия: {row["mean_energy"]:.4f}<br>'
-                f'Pitch: {row["mean_pitch"]:.1f} Гц<br>'
-                f'Интенсивность: {row["mean_intensity"]:.1f} дБ<extra></extra>'
+                f'Pitch: {row["mean_pitch"]:.1f} Гц<extra></extra>'
             )
         ))
 
-    # Красная цепочка по верхним точкам
-    if len(pdf) > 1:
-        ldf = pd.concat([pdf, pdf.iloc[[0]]])
+    # Сплошная красная линия по верхним точкам
+    if len(pdf) >= 2:
+        ldf = pd.concat([pdf, pdf.iloc[[0]]])  # замыкаем
         fig.add_trace(go.Scatter3d(
             x=ldf['F1'], y=ldf['F2'], z=ldf['count'],
             mode='lines',
-            line=dict(color='red', width=4, dash='dot'),
-            name='Форма гласных',
+            line=dict(color='red', width=5),
+            name='Форма пространства гласных',
             hoverinfo='skip'
         ))
 
     fig.update_layout(
         scene=dict(
-            xaxis_title='F1 (Гц)',
-            yaxis_title='F2 (Гц)',
-            zaxis_title='Количество',
+            xaxis_title='F1 (Гц)', yaxis_title='F2 (Гц)', zaxis_title='Количество',
             xaxis=dict(autorange="reversed"),
             yaxis=dict(autorange="reversed"),
-            zaxis=dict(range=[0, pdf['count'].max()*1.15])
+            zaxis=dict(range=[0, max(8, pdf['count'].max() * 1.2)])
         ),
-        height=750,
-        margin=dict(l=0, r=0, b=0, t=40)
+        height=720,
+        margin=dict(l=10, r=10, b=10, t=40)
     )
 
     return fig, pdf, df
 
+# --- Кластеризация (с защитой от малых данных) ---
+def plot_clustering_hulls(vowel_data):
+    df = pd.DataFrame(vowel_data)
+    if len(df) < 8:
+        fig = go.Figure()
+        fig.update_layout(title="Недостаточно данных для кластеризации (нужно ≥8 гласных)")
+        return fig
+    
+    df_n = df.copy()
+    for c in ['F1', 'F2']:
+        df_n[c] = (df[c] - df[c].mean()) / df[c].std()
+    
+    kmeans = KMeans(n_clusters=6, random_state=42, n_init=10)
+    df['cluster'] = kmeans.fit_predict(df_n[['F1', 'F2']])
+    
+    fig = go.Figure()
+    colors = px.colors.qualitative.Safe
+    
+    for i in range(6):
+        c_df = df[df['cluster'] == i]
+        if len(c_df) < 3: continue
+        
+        points = c_df[['F1', 'F2']].values
+        hull = ConvexHull(points)
+        h_pts = points[hull.vertices]
+        h_pts = np.vstack([h_pts, h_pts[0]])
+        
+        fig.add_trace(go.Scatter(
+            x=h_pts[:,0], y=h_pts[:,1],
+            fill="toself", fillcolor=colors[i], opacity=0.18,
+            line=dict(color=colors[i]), showlegend=False
+        ))
+        fig.add_trace(go.Scatter(
+            x=c_df['F1'], y=c_df['F2'],
+            mode='markers', marker=dict(color=colors[i], size=9),
+            name=f'Кластер {i+1}', text=c_df['vowel']
+        ))
 
-# =============================================================================
-# Основное приложение
-# =============================================================================
+    fig.update_layout(
+        xaxis=dict(autorange="reversed", title="F1"),
+        yaxis=dict(autorange="reversed", title="F2"),
+        title="Кластеризация гласных (Convex Hull)",
+        height=550
+    )
+    return fig
+
+# --- Главная функция ---
 def main():
-    st.set_page_config(layout="wide", page_title="SpeechViz3D — 3D Карта гласных")
-    st.title("3D Карта русских гласных + анализ")
+    st.set_page_config(layout="wide", page_title="SpeechViz3D — Карта гласных")
+    st.title("3D-карта русских гласных")
 
-    uploaded_file = st.file_uploader("Выберите аудиофайл (.wav)", type=["wav"])
+    uploaded_file = st.file_uploader("Выберите .wav файл", type=["wav"])
 
     if not uploaded_file:
-        st.info("Загрузите .wav файл чтобы начать анализ")
         return
 
     audio_path = os.path.join(OUTPUT_DIR, uploaded_file.name)
     with open(audio_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-    with st.spinner("Транскрибация и акустический анализ..."):
+    with st.spinner("Анализ аудио..."):
         segments, full_text = transcribe_cached(audio_path)
         vowel_data = analyze_vowel_segments(audio_path, segments)
 
     if not vowel_data:
-        st.error("Не удалось найти гласные для анализа")
+        st.error("Гласные не найдены в записи")
         return
 
     st.subheader("Транскрипция")
     st.write(full_text)
-    st.markdown(f"**Найдено гласных реализаций: {len(vowel_data)}**")
+    st.markdown(f"**Реализаций гласных: {len(vowel_data)}**")
 
-    # ── Главный 3D-график ──────────────────────────────────────────────────────
+    # ── Главный 3D-график ───────────────────────────────────────────────
     fig3d, summary_df, full_df = plot_3d_vowel_map(vowel_data)
-
     st.plotly_chart(fig3d, use_container_width=True)
 
-    # ── Кнопки под графиком ─────────────────────────────────────────────────────
+    # Кнопки скачивания
     col1, col2 = st.columns(2)
-
     with col1:
         st.download_button(
-            label="📥 Все измерения (каждая реализация фонемы)",
-            data=full_df.to_csv(index=False).encode('utf-8-sig'),
-            file_name="all_vowel_measurements.csv",
-            mime="text/csv"
+            "📥 Все измерения (каждая гласная)",
+            full_df.to_csv(index=False).encode('utf-8-sig'),
+            "all_measurements.csv", "text/csv"
         )
-
     with col2:
         st.download_button(
-            label="📊 Усреднённые параметры по фонемам",
-            data=summary_df.to_csv(index=False).encode('utf-8-sig'),
-            file_name="vowels_summary.csv",
-            mime="text/csv"
+            "📊 Средние значения по фонемам",
+            summary_df.to_csv(index=False).encode('utf-8-sig'),
+            "vowels_summary.csv", "text/csv"
         )
 
-    # Дополнительные вкладки (по желанию можно оставить/убрать)
-    with st.expander("Дополнительные представления", expanded=False):
-        tab1, tab2 = st.tabs(["Гистограмма", "Кластеризация"])
+    # ── Вкладки с остальными графиками ──────────────────────────────────
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "Гистограмма",
+        "Звезда гласных (условная)",
+        "Кластеризация",
+        "Сводная таблица"
+    ])
 
-        with tab1:
-            counts = pd.DataFrame(vowel_data)['vowel'].value_counts().reset_index()
-            fig_hist = px.bar(counts, x='vowel', y='count', color='vowel',
-                              title="Количество реализаций каждой гласной")
-            st.plotly_chart(fig_hist, use_container_width=True)
+    with tab1:
+        counts = pd.DataFrame(vowel_data)['vowel'].value_counts().reset_index()
+        fig_hist = px.bar(counts, x='vowel', y='count', color='vowel',
+                         title="Распределение гласных")
+        st.plotly_chart(fig_hist, use_container_width=True)
 
-        with tab2:
-            if len(full_df) >= 10:
-                fig_cluster = plot_clustering_hulls(vowel_data)
-                st.plotly_chart(fig_cluster, use_container_width=True)
-            else:
-                st.info("Недостаточно данных для кластеризации (нужно ≥10 гласных)")
+    with tab2:
+        st.info("Место для звезды гласных / радара (можно добавить позже)")
+
+    with tab3:
+        fig_cluster = plot_clustering_hulls(vowel_data)
+        st.plotly_chart(fig_cluster, use_container_width=True)
+
+    with tab4:
+        st.dataframe(summary_df.style.format({
+            'F1': '{:.0f}', 'F2': '{:.0f}',
+            'mean_energy': '{:.4f}', 'mean_pitch': '{:.1f}',
+            'mean_intensity': '{:.1f}'
+        }))
 
 if __name__ == "__main__":
     main()
