@@ -16,9 +16,10 @@ import streamlit.components.v1 as components
 
 
 # Добавь в самый верх, после импортов
-@st.cache_resource(show_spinner="Загрузка модели Whisper (один раз)...")
+@st.cache_resource(show_spinner="Загрузка модели Whisper...")
 def load_whisper_model():
-    return WhisperModel(WHISPER_MODEL, device="auto", compute_type="int8")
+    # Используем модель small или medium для баланса скорости и качества
+    return WhisperModel("medium", device="auto", compute_type="int8")
 
 @st.cache_data(show_spinner="Транскрибация аудио...")
 def transcribe_cached(audio_path):
@@ -33,7 +34,10 @@ def transcribe_cached(audio_path):
 
 @st.cache_data(show_spinner="Акустический анализ гласных (Praat)...")
 def analyze_vowels_cached(audio_path, transcription_segments):
-    return vowel_data, vowel_data # Если phoneme_log_data это то же самое, либо сформируйте отдельный лог
+    # ВАЖНО: Вызываем функцию, которая реально считает данные
+    vowel_data = analyze_vowel_segments(audio_path, transcription_segments)
+    # Возвращаем дважды, если логика main ожидает два значения (vowel_data и log_data)
+    return vowel_data, vowel_data 
 
 @st.cache_data(show_spinner=False)
 def get_plot_3d(vowel_data, audio_filename):
