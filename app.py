@@ -95,59 +95,55 @@ def extract_phonemes(text):
     return phonemes
 
 def find_acoustic_features(sound, segment_start, segment_end):
-    """Извлекает расширенный набор признаков для сегмента."""
+    """Извлекает расширенный набор признаков для сегмента с защитой от коротких фрагментов."""
     
-    # 1. ПРОВЕРКА ДЛИНЫ СЕГМЕНТА (Фикс ошибки)
+    # 1. ПРОВЕРКА ДЛИНЫ: Если сегмент слишком короткий (менее 30 мс), Praat выдаст ошибку.
+    # Для анализа при PITCH_FLOOR=75 минимально нужно около 0.04с.
     duration = segment_end - segment_start
-    if duration < 0.02:  # Если сегмент короче 20мс, Praat может упасть
+    if duration < 0.04:
         return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
 
     try:
+        # Обрезаем звук
         part = sound.extract_part(from_time=segment_start, to_time=segment_end)
         
-        # Базовые объекты
+        # Анализ объектов (тут часто происходят падения на тихих или коротких звуках)
         formant_obj = part.to_formant_burg()
         pitch_obj = part.to_pitch(pitch_floor=PITCH_FLOOR, pitch_ceiling=PITCH_CEILING)
-        
-        # Если сегмент очень короткий, to_intensity может выдать ошибку
         intensity_obj = part.to_intensity()
-    # Обрезаем звук для анализа микро-изменений (jitter/shimmer)
-    part = sound.extract_part(from_time=segment_start, to_time=segment_end)
-    
-    # Базовые объекты
-    formant_obj = part.to_formant_burg()
-    pitch_obj = part.to_pitch(pitch_floor=PITCH_FLOOR, pitch_ceiling=PITCH_CEILING)
-    intensity_obj = part.to_intensity()
-    
-    # 1. Форманты (середина сегмента для стабильности)
-    mid_t = (segment_start + segment_end) / 2
-    f1 = formant_obj.get_value_at_time(1, mid_t)
-    f2 = formant_obj.get_value_at_time(2, mid_t)
-    
-    # 2. Основной тон и Интенсивность (средние)
-    pitch_values = pitch_obj.selected_array['frequency']
-    pitch_values = pitch_values[pitch_values > 0]
-    mean_f0 = np.mean(pitch_values) if len(pitch_values) > 0 else np.nan
-    mean_int = intensity_obj.get_average()
-    
-    # 3. Энергия (физическая: Pa^2 * s)
-    # Используем формулу: Energy = 10^((Intensity-120)/10) * duration
-    # Это дает приближенное значение акустической энергии
-    energy = (10**((mean_int - 120) / 10)) * (segment_end - segment_start)
-
-    # 4. Голосовые качества (Jitter, Shimmer, HNR)
-    try:
-        point_process = parselmouth.praat.call(part, "To PointProcess (periodic, cc)", PITCH_FLOOR, PITCH_CEILING)
-        jitter = parselmouth.praat.call(point_process, "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3) * 100 # в %
-        shimmer = parselmouth.praat.call([part, point_process], "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6) # в дБ
         
-        harmonicity = part.to_harmonicity()
-        hnr = harmonicity.get_value(mid_t)
-   except Exception as e:
-        # Если Praat все равно не может обработать сегмент, возвращаем NaN
-        return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
+        # Форманты (середина сегмента)
+        mid_t = (segment_start + segment_end) / 2
+        f1 = formant_obj.get_value_at_time(1, mid_t)
+        f2 = formant_obj.get_value_at_time(2, mid_t)
+        
+        # Основной тон (F0)
+        pitch_values = pitch_obj.selected_array['frequency']
+        pitch_values = pitch_values[pitch_values > 0]
+        mean_f0 = np.mean(pitch_values) if len(pitch_values) > 0 else np.nan
+        
+        # Интенсивность
+        mean_int = intensity_obj.get_average()
+        
+        # Энергия
+        energy = (10**((mean_int - 120) / 10)) * duration
 
-    return f1, f2, mean_f0, mean_int, energy, jitter, shimmer, hnr
+        # 2. Голосовые качества (Jitter, Shimmer, HNR)
+        try:
+            point_process = parselmouth.praat.call(part, "To PointProcess (periodic, cc)", PITCH_FLOOR, PITCH_CEILING)
+            jitter = parselmouth.praat.call(point_process, "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3) * 100
+            shimmer = parselmouth.praat.call([part, point_process], "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6)
+            
+            harmonicity = part.to_harmonicity()
+            hnr = harmonicity.get_value(mid_t)
+        except:
+            jitter, shimmer, hnr = np.nan, np.nan, np.nan
+
+        return f1, f2, mean_f0, mean_int, energy, jitter, shimmer, hnr
+
+    except Exception:
+        # Если любая операция Praat упала (например, to_intensity или to_formant)
+        return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
 
 
 def analyze_vowel_segments(audio_path, transcription_segments):
